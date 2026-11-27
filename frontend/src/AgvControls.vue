@@ -147,9 +147,7 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <main class="page agv-page">
-    <slot />
-    <section class="panel agv-controls" aria-labelledby="agv-title">
+  <section class="panel agv-controls" aria-labelledby="agv-title">
       <div class="panel-heading">
         <div>
           <h1 id="agv-title">AGV manual controls</h1>
@@ -198,6 +196,5 @@ onUnmounted(() => clearInterval(timer))
         <p v-if="commandError" class="banner banner-alert" role="alert">{{ commandError }}</p>
         <p v-else-if="notice || outcome" class="agv-message" role="status">{{ notice || outcome }}</p>
       </div>
-    </section>
-  </main>
+  </section>
 </template>

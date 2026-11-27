@@ -33,11 +33,26 @@ export interface AgvStatus {
   results: Partial<Record<AgvAction, { id: number; state: string; acknowledged: boolean; confirmedStopped: boolean }>>
 }
 
+export interface GatewayAgvFeedback {
+  connected: boolean
+  fresh: boolean
+  statusAge: number | null
+  station: number | null
+  motion: 'moving' | 'stopped' | 'unknown'
+  speed: number | null
+  fault: number | null
+}
+
+export interface GatewayAgvStatus {
+  linkMode: 'ipc-gateway'
+  device: GatewayAgvFeedback | null
+}
+
 export type JobGatewayStatus = { configured: false } | {
   configured: true
   health: { build: string; protocol: number; enabled: boolean; simulated: boolean; motionEnabled: boolean }
   status: { owner: string | null; armed: boolean; activeJobId: string | null; recoveryRequired: boolean }
-  agv: { connected: boolean; fresh: boolean; statusAge: number | null } | null
+  agv: GatewayAgvFeedback | null
   jobs: { job_id?: string; type?: string; state?: string }[]
 }
 
@@ -135,6 +150,7 @@ export interface LineStatus {
   simulation: boolean
   plc: { quality: Quality; sampleTime: string | null; remote: boolean | null }
   doorPilot?: { tank: number; revision: string | null; nextAction: DoorPilotAction | null; message: string }
+  agvSource?: 'ipc-gateway'
   agv: { station: number | null; stationConfirmed: boolean; destination: number | null; moving: boolean }
   manualTravel?: { durationMs: number; remainingMs: number } | null
   mockStationVisit?: MockStationVisit

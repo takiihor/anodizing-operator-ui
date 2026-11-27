@@ -55,7 +55,7 @@ confirmed on the line.
    and PLC reading. Compare the displayed tank status with the line.
 2. For the supervised Tank 1 pilot, follow the on-site procedure, select
    **Tank 1**, and use the available **Open door** or **Close door** action.
-3. In **AGV jog**, click **Check IPC communication** and review **IPC to AGV**
+3. In **AGV status** or **AGV jog**, click **Check IPC communication** and review **IPC to AGV**
    for vehicle feedback. **Test move to Tank #3 (simulation)** runs an
    isolated station visit and displays its result on the same page.
 
@@ -109,9 +109,10 @@ certificate, and module key issued for the `read` scope.
 | `ANODIZING_JOB_GATEWAY_CERT_FILE` | Path to the issued IPC certificate |
 | `ANODIZING_JOB_GATEWAY_KEY_FILE` | Path to the module bearer key file outside the repository |
 
-Start the operator console and open **AGV jog → IPC Job Gateway**. The card uses
-the console's `GET /api/job-gateway/status` endpoint, which reads IPC
-`/v1/health`, `/v1/status`, and `/v1/jobs`. This stage is read-only.
+Use `ANODIZING_AGV_MODE=ipc-gateway` in the deployment profile to show live AGV
+feedback in the header and **AGV status** page. Station numbers are the IDs
+reported by the IPC. This mode reads vehicle status and disables AGV commands.
+The **IPC Job Gateway** card reads `/v1/health`, `/v1/status`, and `/v1/jobs`.
 [IPC field results and API contract](PLC_AGV_COMMUNICATION_TEST.md#ipc-module-gateway-api--192168125118875)
 
 ### Test a station visit with the mock Gateway

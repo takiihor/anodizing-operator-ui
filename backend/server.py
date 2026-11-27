@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from .agv_client import AgvClient, ControllerUnavailable
 from .agv_module import AgvController
-from .job_gateway import IPCJobGateway, JobGatewayUnavailable, MockStationVisit, running_mock_ipc
+from .job_gateway import GatewayAgvMonitor, IPCJobGateway, JobGatewayUnavailable, MockStationVisit, running_mock_ipc
 from .line import OperatorLine
 from .plc_module import DoorPilot, PLCMonitor, monitoring_status
 
@@ -61,6 +61,8 @@ class Server(ThreadingHTTPServer):
         super().server_close()
 
     def line_status(self, status, *, revalidate_plc=False):
+        if isinstance(self.agv, GatewayAgvMonitor):
+            status['agvSource'] = 'ipc-gateway'
         if self.station_visit_test is not None:
             status['stationVisitTest'] = self.station_visit_test.snapshot()
         if self.mock_station_visit is not None:
@@ -167,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/agv/status':
             try:
                 return self.reply(HTTPStatus.OK, self.server.agv.status())
-            except (ControllerUnavailable, ValueError) as error:
+            except (ControllerUnavailable, JobGatewayUnavailable, ValueError) as error:
                 return self.reply(HTTPStatus.SERVICE_UNAVAILABLE, {
                     'error': str(error), 'setupUrl': self.server.agv.setup_url,
                 })
@@ -224,7 +226,7 @@ def main():
     parser.add_argument('--port', type=int, default=8871)
     parser.add_argument('--agv-controller-port', type=int, default=os.environ.get('ANODIZING_AGV_CONTROLLER_PORT'),
                         help='Loopback or forwarded port for the ipc or legacy AGV backend.')
-    parser.add_argument('--agv-mode', choices=('simulator', 'serial', 'wired', 'ipc', 'legacy'),
+    parser.add_argument('--agv-mode', choices=('simulator', 'serial', 'wired', 'ipc', 'legacy', 'ipc-gateway'),
                         default=os.environ.get('ANODIZING_AGV_MODE'))
     parser.add_argument('--agv-api-only', action='store_true', help='Run the AGV API on the robot IPC.')
     args = parser.parse_args()
@@ -234,13 +236,13 @@ def main():
     agv_mode = args.agv_mode or ('simulator' if args.agv_controller_port is None else 'legacy')
     if not 1 <= controller_port <= 65535:
         parser.error('AGV controller port must be 1 to 65535.')
+    if args.agv_api_only and agv_mode in ('ipc', 'legacy', 'ipc-gateway'):
+        parser.error('The AGV-only API must own a local AGV link.')
     if agv_mode in ('ipc', 'legacy'):
-        if args.agv_api_only:
-            parser.error('The AGV-only API must own a local AGV link.')
         if controller_port == args.port:
             parser.error('Use a different port for the AGV controller.')
         agv = AgvClient(controller_port, native=agv_mode == 'ipc')
-    else:
+    elif agv_mode != 'ipc-gateway':
         try:
             agv = AgvController(agv_mode, port=os.environ.get('ANODIZING_AGV_DEVICE'),
                                 address=os.environ.get('ANODIZING_AGV_ADDRESS'),
@@ -266,6 +268,10 @@ def main():
                        if gateway_mode == 'read' and not args.agv_api_only else None)
     except ValueError as error:
         parser.error(str(error))
+    if agv_mode == 'ipc-gateway':
+        if job_gateway is None:
+            parser.error('Configure the IPC job gateway to monitor AGV feedback.')
+        agv = GatewayAgvMonitor(job_gateway)
     state = ROOT / '.runtime'
     with ExitStack() as stack:
         pilot = None

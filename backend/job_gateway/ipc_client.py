@@ -24,6 +24,36 @@ class JobGatewayReads:
     def jobs(self):
         return self._get('jobs')
 
+    @staticmethod
+    def agv_feedback(status):
+        device = status.get('device')
+        if not isinstance(device, dict) or type(device.get('connected')) is not bool:
+            return None
+
+        connected = device['connected']
+        age = device.get('status_age_s')
+        age = age if type(age) in (int, float) and 0 <= age < float('inf') else None
+        report = device.get('status')
+        fresh = (connected and device.get('stale') is False and isinstance(report, dict)
+                 and bool(report) and age is not None and age < DEVICE_FRESH_SECONDS)
+        report = report if fresh else {}
+        station = report.get('current_station')
+        speed = report.get('actual_speed_m_h')
+        speed = speed if type(speed) in (int, float) and 0 <= speed < float('inf') else None
+        fault = report.get('fault_code')
+        stopped = report.get('stopped')
+        motion = ('moving' if stopped is False or (speed is not None and speed != 0) else
+                  'stopped' if stopped is True and speed == 0 else 'unknown')
+        return {
+            'connected': connected,
+            'fresh': fresh,
+            'statusAge': age,
+            'station': station if type(station) is int and 1 <= station <= 255 else None,
+            'motion': motion,
+            'speed': speed,
+            'fault': fault if type(fault) is int and fault >= 0 else None,
+        }
+
     def snapshot(self):
         health = self.health()
         if (not isinstance(health.get('build'), str) or not health['build']
@@ -38,20 +68,6 @@ class JobGatewayReads:
         jobs = self.jobs().get('jobs')
         if not isinstance(jobs, list) or not all(isinstance(job, dict) for job in jobs):
             raise JobGatewayUnavailable('IPC jobs returned an invalid job list.')
-
-        device = status.get('device')
-        agv = None
-        if isinstance(device, dict) and type(device.get('connected')) is bool:
-            connected = device['connected']
-            age = device.get('status_age_s')
-            age = age if type(age) in (int, float) and 0 <= age < float('inf') else None
-            report = device.get('status')
-            agv = {
-                'connected': connected,
-                'fresh': (connected and device.get('stale') is False and isinstance(report, dict)
-                          and bool(report) and age is not None and age < DEVICE_FRESH_SECONDS),
-                'statusAge': age,
-            }
 
         return {
             'configured': True,
@@ -68,7 +84,7 @@ class JobGatewayReads:
                 'activeJobId': status['active_job_id'],
                 'recoveryRequired': status['recovery_required'],
             },
-            'agv': agv,
+            'agv': self.agv_feedback(status),
             'jobs': [
                 {key: job[key] for key in ('job_id', 'type', 'state') if isinstance(job.get(key), str)}
                 for job in jobs
@@ -131,3 +147,16 @@ class IPCJobGateway(JobGatewayReads):
             raise JobGatewayUnavailable(f'Could not read IPC {resource}.') from None
         finally:
             connection.close()
+
+
+class GatewayAgvMonitor:
+    setup_url = None
+
+    def __init__(self, gateway: IPCJobGateway):
+        self.gateway = gateway
+
+    def status(self):
+        return {'linkMode': 'ipc-gateway', 'device': self.gateway.agv_feedback(self.gateway.status())}
+
+    def command(self, _body):
+        raise ValueError('IPC gateway AGV monitoring is read-only.')

@@ -10,13 +10,13 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from backend.job_gateway import IPCJobGateway, JobGatewayUnavailable
+from backend.job_gateway import GatewayAgvMonitor, IPCJobGateway, JobGatewayUnavailable
 from backend.server import Server
 
 
 @contextmanager
-def running_console(gateway):
-    with Server(0, job_gateway=gateway) as server:
+def running_console(gateway, *, agv=None):
+    with Server(0, job_gateway=gateway, agv_controller=agv) as server:
         thread = Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
         thread.start()
         try:
@@ -91,7 +91,8 @@ class JobGatewayTest(unittest.TestCase):
             self.assertTrue(status['configured'])
             self.assertFalse(status['health']['motionEnabled'])
             self.assertEqual(status['status']['owner'], 'operator-ui')
-            self.assertEqual(status['agv'], {'connected': False, 'fresh': False, 'statusAge': 1.2})
+            self.assertEqual(status['agv'], {'connected': False, 'fresh': False, 'statusAge': 1.2,
+                                             'station': None, 'motion': 'unknown', 'speed': None, 'fault': None})
             self.assertEqual(status['jobs'], [{'job_id': 'visit-1', 'type': 'station_visit', 'state': 'done'}])
             self.assertNotIn(b'read-test-key', raw)
             self.assertNotIn(b'omit-this-lease', raw)
@@ -102,6 +103,48 @@ class JobGatewayTest(unittest.TestCase):
 
         self.assertEqual(calls, [('GET', '/v1/' + path, 'Bearer read-test-key')
                                  for path in ('health', 'status', 'jobs')])
+
+    def test_agv_monitor_reads_the_ipc_and_rejects_commands(self):
+        gateway = self.client()
+        device = {'connected': True, 'stale': False, 'status_age_s': 0.7,
+                  'status': {'current_station': 2, 'stopped': True, 'actual_speed_m_h': 0, 'fault_code': 0}}
+        connection = Mock(spec=HTTPSConnection)
+        with patch('backend.job_gateway.ipc_client.HTTPSConnection', return_value=connection), \
+                running_console(gateway, agv=GatewayAgvMonitor(gateway)) as (url, token):
+            headers = {'X-Operator-Token': token, 'Content-Type': 'application/json'}
+
+            @contextmanager
+            def response():
+                yield reply({'device': device})
+
+            connection.getresponse.side_effect = response
+            with urlopen(Request(url + '/api/line/status', headers=headers), timeout=2) as line:
+                self.assertEqual(json.load(line)['agvSource'], 'ipc-gateway')
+            connection.request.assert_not_called()
+
+            status = url + '/api/agv/status'
+            with urlopen(Request(status, headers=headers), timeout=2) as current:
+                self.assertEqual(json.load(current), {
+                    'linkMode': 'ipc-gateway',
+                    'device': {'connected': True, 'fresh': True, 'statusAge': 0.7,
+                               'station': 2, 'motion': 'stopped', 'speed': 0, 'fault': 0},
+                })
+            connection.request.assert_called_once_with('GET', '/v1/status', headers=gateway.headers)
+
+            device['status_age_s'] = 6
+            with urlopen(Request(status, headers=headers), timeout=2) as stale:
+                self.assertEqual(json.load(stale)['device'], {
+                    'connected': True, 'fresh': False, 'statusAge': 6,
+                    'station': None, 'motion': 'unknown', 'speed': None, 'fault': None,
+                })
+
+            command = Request(url + '/api/agv/command', b'{"action":"forward"}', headers)
+            with self.assertRaises(HTTPError) as refused:
+                urlopen(command, timeout=2)
+            with refused.exception as error:
+                self.assertEqual(error.code, 400)
+                self.assertIn('read-only', json.load(error)['error'])
+            self.assertEqual(connection.request.call_count, 2)
 
     def test_tls_failure_is_reported_without_connection_fallback(self):
         gateway = self.client()

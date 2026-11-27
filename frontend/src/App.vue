@@ -8,7 +8,7 @@ import SettingsPage from './SettingsPage.vue'
 import TankPanel from './TankPanel.vue'
 import TrackMap from './TrackMap.vue'
 import { navigate, page, TITLES } from './router'
-import type { AgvStatus, Command, JobGatewayStatus, LineStatus, Mode, Page, RecipeLibrary } from './types'
+import type { AgvStatus, Command, GatewayAgvStatus, JobGatewayStatus, LineStatus, Mode, Page, RecipeLibrary } from './types'
 
 let token = document.querySelector<HTMLMetaElement>('meta[name="module-token"]')?.content ?? ''
 const snapshot = ref<LineStatus>()
@@ -18,8 +18,12 @@ const connected = ref(false)
 const error = ref('')
 const notice = ref('')
 const wallTime = ref(Date.now())
+const ipcAgv = ref<GatewayAgvStatus['device']>()
+const ipcAgvError = ref(false)
 let poll: AbortController | undefined
+let ipcAgvPoll: AbortController | undefined
 let timer: ReturnType<typeof setInterval> | undefined
+let ipcAgvTimer: ReturnType<typeof setInterval> | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 const NAV: Page[] = ['run', 'manual', 'recipes', 'settings', 'agv']
@@ -29,6 +33,16 @@ const status = computed<LineStatus | undefined>(() => {
   const current = snapshot.value
   if (!current || connected.value || current.plc.quality !== 'live') return current
   return { ...current, plc: { ...current.plc, quality: 'stale' } }
+})
+const usesIpcAgv = computed(() => status.value?.agvSource === 'ipc-gateway')
+const ipcAgvLabel = computed(() => {
+  if (ipcAgvError.value) return 'IPC unavailable'
+  const device = ipcAgv.value
+  if (device === undefined) return 'Checking…'
+  if (!device) return 'No device feedback'
+  if (!device.connected) return 'Disconnected'
+  if (!device.fresh) return 'Status stale'
+  return device.station === null ? 'Live feedback' : `Station #${device.station}`
 })
 const tank = computed(() => status.value?.tanks.find(item => item.id === selected.value))
 const active = computed(() => status.value?.run.state === 'running' || status.value?.agv.moving === true
@@ -82,6 +96,38 @@ function requestAgv(path: 'status' | 'command', init: RequestInit) {
 function requestJobGateway(signal: AbortSignal) {
   return request<JobGatewayStatus>('job-gateway/status', { signal })
 }
+
+async function refreshIpcAgv() {
+  if (!usesIpcAgv.value || ipcAgvPoll) return
+  const controller = new AbortController()
+  ipcAgvPoll = controller
+  try {
+    const response = await request<GatewayAgvStatus>('agv/status', {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3500)]),
+    })
+    if (!controller.signal.aborted) {
+      ipcAgv.value = response.device
+      ipcAgvError.value = false
+    }
+  } catch {
+    if (!controller.signal.aborted) {
+      ipcAgv.value = undefined
+      ipcAgvError.value = true
+    }
+  } finally {
+    ipcAgvPoll = undefined
+  }
+}
+
+watch(usesIpcAgv, enabled => {
+  if (enabled) {
+    void refreshIpcAgv()
+  } else {
+    ipcAgvPoll?.abort()
+    ipcAgv.value = undefined
+    ipcAgvError.value = false
+  }
+})
 
 function checkPlc() {
   return request<LineStatus['plc']>('plc/check', { signal: AbortSignal.timeout(6000) })
@@ -187,12 +233,15 @@ onMounted(() => {
     wallTime.value = Date.now()
     void refresh()
   }, 700)
+  ipcAgvTimer = setInterval(refreshIpcAgv, 1500)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', interceptLinks)
   clearInterval(timer)
+  clearInterval(ipcAgvTimer)
   poll?.abort()
+  ipcAgvPoll?.abort()
 })
 </script>
 
@@ -215,7 +264,7 @@ onUnmounted(() => {
             :aria-current="page === item ? 'page' : undefined"
           >
             <span class="nav-icon" aria-hidden="true">{{ { run: '▶', manual: '✋', recipes: '☰', settings: '⚙', agv: '⇄' }[item] }}</span>
-            {{ TITLES[item] }}
+            {{ item === 'agv' && usesIpcAgv ? 'AGV status' : TITLES[item] }}
             <span v-if="PAGE_MODE[item] && status?.mode === PAGE_MODE[item]" class="nav-mode" title="Current line mode">mode</span>
           </a>
         </nav>
@@ -228,9 +277,13 @@ onUnmounted(() => {
               <small>{{ freshData ? 'Readings up to date' : age ? `Last good reading ${age}` : 'Awaiting PLC data' }}</small>
             </dd>
           </div>
-          <div class="status-tile" :class="{ moving: connected && status.agv.moving }">
+          <div class="status-tile" :class="{ moving: usesIpcAgv ? ipcAgv?.motion === 'moving' : connected && status.agv.moving }">
             <dt>AGV</dt>
-            <dd v-if="status.agv.station !== null">
+            <dd v-if="usesIpcAgv">
+              <strong><i class="dot" aria-hidden="true"></i>{{ ipcAgvLabel }}</strong>
+              <small>IPC feedback<template v-if="ipcAgv?.motion === 'stopped'"> · Stopped</template><template v-else-if="ipcAgv?.motion === 'moving'"> · Moving</template></small>
+            </dd>
+            <dd v-else-if="status.agv.station !== null">
               <strong v-if="connected && status.agv.moving"><i class="dot" aria-hidden="true"></i>Moving to #{{ status.agv.destination }}</strong>
               <strong v-else-if="connected && status.agv.stationConfirmed"><i class="dot" aria-hidden="true"></i>At tank #{{ status.agv.station }}</strong>
               <strong v-else><i class="dot" aria-hidden="true"></i>Last seen at #{{ status.agv.station }}</strong>
@@ -266,14 +319,15 @@ onUnmounted(() => {
     </header>
 
     <div class="page-body">
-      <AgvControls v-if="page === 'agv'" :request="requestAgv">
+      <main v-if="page === 'agv'" class="page agv-page">
         <JobGatewayStatusPanel
           :request="requestJobGateway"
           :station-visit="status?.stationVisitTest"
           :test-disabled="controlsDisabled"
           @test-visit="command({ action: 'test-station-visit' })"
         />
-      </AgvControls>
+        <AgvControls v-if="status && !usesIpcAgv" :request="requestAgv" />
+      </main>
 
       <main v-else-if="!status" class="page">
         <p class="banner banner-alert" role="status">Connecting to the line service…</p>
@@ -317,7 +371,7 @@ onUnmounted(() => {
             @select="id => selected = id"
           >
             <template #actions>
-              <a href="/agv" data-nav="agv" class="button ghost button-link">AGV jog controls</a>
+              <a href="/agv" data-nav="agv" class="button ghost button-link">{{ usesIpcAgv ? 'AGV status' : 'AGV jog controls' }}</a>
             </template>
           </TrackMap>
           <TankPanel class="area-side" :tank="tank" :status="status" :disabled="controlsDisabled" :check-plc="checkPlc"

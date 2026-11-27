@@ -80,6 +80,10 @@ onUnmounted(() => {
       <div v-if="!gateway.health.simulated">
         <dt>IPC to AGV</dt>
         <dd>{{ !gateway.agv ? 'No device feedback' : !gateway.agv.connected ? 'Disconnected' : gateway.agv.fresh ? 'Live feedback' : 'Status stale' }}</dd>
+        <small v-if="gateway.agv?.fresh">
+          <template v-if="gateway.agv.station !== null">Station #{{ gateway.agv.station }} · </template>
+          {{ { moving: 'Moving', stopped: 'Stopped', unknown: 'Motion unknown' }[gateway.agv.motion] }}
+        </small>
         <small v-if="gateway.agv?.statusAge != null">Last report {{ gateway.agv.statusAge.toFixed(1) }} s ago</small>
       </div>
       <div>
