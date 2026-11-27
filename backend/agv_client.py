@@ -1,4 +1,4 @@
-"""Same-host client for the robot service's AGV commissioning API."""
+"""Loopback client for the AGV IPC and legacy commissioning APIs."""
 
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -17,6 +17,65 @@ class ControllerUnavailable(OSError):
     pass
 
 
+def status_view(state, controller_id, *, setup_url=None):
+    if any(type(state.get(key)) is not int for key in ('connection_id', 'stop_generation', 'sequence')):
+        raise ControllerUnavailable('The AGV controller returned an incomplete link state.')
+    settings = state.get('settings') or {}
+    report = state.get('status') or {}
+    transport = settings.get('mode')
+    connected = state.get('connected') is True
+    direct = transport in ('serial', 'simulator') and not state.get('wired_port') and not state.get('executor_link')
+    age = state.get('status_age_s')
+    fresh = connected and bool(report) and type(age) in (int, float) and 0 <= age < 5 and state.get('stale') is False
+    speed = report.get('actual_speed_m_h') if fresh else None
+    stopped = report.get('stopped') if fresh else None
+    motion = ('moving' if stopped is False or (speed is not None and speed != 0) else
+              'stopped' if stopped is True and speed == 0 else 'unknown')
+    if not connected:
+        motion_block = 'Connect the AGV in Controller setup.'
+    elif not direct:
+        motion_block = 'Forward, Reverse and Rotate require a direct serial or simulator connection.'
+    elif state.get('recipe_active'):
+        motion_block = 'A robot recipe is using the AGV.'
+    elif state.get('halt_pending'):
+        motion_block = 'Wait for the Stop outcome before moving.'
+    elif state.get('motion_block'):
+        motion_block = state['motion_block']
+    elif not fresh or motion == 'unknown':
+        motion_block = 'Fresh vehicle status is required. Query status and check the link.'
+    elif report.get('fault_code') != 0 or report.get('obstacle_stop') is not False:
+        motion_block = 'Clear the reported AGV fault or obstacle before moving.'
+    elif report.get('mode') not in (0, 2):
+        motion_block = 'Select standard or station-call mode in Controller setup.'
+    else:
+        motion_block = None
+
+    results = {}
+    for command, result in (state.get('results') or {}).items():
+        name = result.get('requested_command', command)
+        if name not in ACTIONS or type(result.get('tx_id')) is not int:
+            continue
+        if name in results and result['tx_id'] <= results[name]['id']:
+            continue
+        results[name] = dict(id=result['tx_id'], state=result.get('state'),
+                             acknowledged=bool(result.get('acknowledged_at')),
+                             confirmedStopped=result.get('confirmed_stopped') is True)
+    return {
+        'setupUrl': setup_url,
+        'authority': {
+            'controller': controller_id, 'connectionId': state['connection_id'],
+            'stopGeneration': state['stop_generation'],
+        },
+        'sequence': state['sequence'], 'connected': connected, 'transport': transport,
+        'armed': state.get('armed') is True, 'fresh': fresh, 'motion': motion, 'speed': speed,
+        'fault': report.get('fault_code') if fresh else None,
+        'statusAge': age, 'motionBlock': motion_block, 'error': state.get('error'),
+        'canStop': connected and direct, 'canQuery': connected and not state.get('recipe_active'),
+        'haltPending': state.get('halt_pending') is True,
+        'results': results,
+    }
+
+
 class ModuleToken(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -29,17 +88,19 @@ class ModuleToken(HTMLParser):
 
 
 class AgvClient:
-    """Use the robot service as the single owner of the link and motion interlocks."""
+    """Forward jog requests to the service that owns the AGV link."""
 
-    def __init__(self, port=8870):
+    def __init__(self, port=8870, *, native=False):
         self.port = port
-        self.setup_url = f'http://127.0.0.1:{port}/operator/#/agv'
+        self.native = native
+        self.setup_url = None if native else f'http://127.0.0.1:{port}/operator/#/agv'
         self.token = None
         self.lock = Lock()
 
     def _http(self, path, *, token=None, body=None):
         connection = HTTPConnection('127.0.0.1', self.port, timeout=2 if body is None else 6)
-        headers = {'X-Module-Token': token} if token else {}
+        header = 'X-Operator-Token' if self.native else 'X-Module-Token'
+        headers = {header: token} if token else {}
         try:
             if body is None:
                 connection.request('GET', path, headers=headers)
@@ -62,11 +123,15 @@ class AgvClient:
     def _credential(self):
         with self.lock:
             if self.token is None:
-                code, page = self._http('/operator/')
-                parser = ModuleToken()
-                parser.feed(page.decode('utf-8', errors='replace'))
-                token = parser.token
-                if code != 200 or not token or not 32 <= len(token) <= 128 or not token.isascii() or not token.isprintable():
+                if self.native:
+                    code, payload = self._http('/api/line/token')
+                    token = self._decode(code, payload).get('token')
+                else:
+                    code, page = self._http('/operator/')
+                    parser = ModuleToken()
+                    parser.feed(page.decode('utf-8', errors='replace'))
+                    token = parser.token
+                if code != 200 or not isinstance(token, str) or not 32 <= len(token) <= 128 or not token.isascii() or not token.isprintable():
                     raise ControllerUnavailable('Could not obtain a session from the AGV controller.')
                 self.token = token
             return self.token
@@ -96,69 +161,15 @@ class AgvClient:
         return state
 
     def _state(self, token):
-        code, payload = self._http('/api/agv?cached=1', token=token)
+        code, payload = self._http('/api/agv/status' if self.native else '/api/agv?cached=1', token=token)
         if code == 403:
             self._forget(token)
             return None
-        return self._view(self._decode(code, payload), token)
+        state = self._decode(code, payload)
+        return state if self.native else self._view(state, token)
 
     def _view(self, state, token):
-        if any(type(state.get(key)) is not int for key in ('connection_id', 'stop_generation', 'sequence')):
-            raise ControllerUnavailable('The AGV controller returned an incomplete link state.')
-        settings = state.get('settings') or {}
-        report = state.get('status') or {}
-        transport = settings.get('mode')
-        connected = state.get('connected') is True
-        direct = transport in ('serial', 'simulator') and not state.get('wired_port') and not state.get('executor_link')
-        age = state.get('status_age_s')
-        fresh = connected and bool(report) and type(age) in (int, float) and 0 <= age < 5 and state.get('stale') is False
-        speed = report.get('actual_speed_m_h') if fresh else None
-        stopped = report.get('stopped') if fresh else None
-        motion = ('moving' if stopped is False or (speed is not None and speed != 0) else
-                  'stopped' if stopped is True and speed == 0 else 'unknown')
-        if not connected:
-            motion_block = 'Connect the AGV in Controller setup.'
-        elif not direct:
-            motion_block = 'Forward, Reverse and Rotate require a direct serial or simulator connection.'
-        elif state.get('recipe_active'):
-            motion_block = 'A robot recipe is using the AGV.'
-        elif state.get('halt_pending'):
-            motion_block = 'Wait for the Stop outcome before moving.'
-        elif state.get('motion_block'):
-            motion_block = state['motion_block']
-        elif not fresh or motion == 'unknown':
-            motion_block = 'Fresh vehicle status is required. Query status and check the link.'
-        elif report.get('fault_code') != 0 or report.get('obstacle_stop') is not False:
-            motion_block = 'Clear the reported AGV fault or obstacle before moving.'
-        elif report.get('mode') not in (0, 2):
-            motion_block = 'Select standard or station-call mode in Controller setup.'
-        else:
-            motion_block = None
-
-        results = {}
-        for command, result in (state.get('results') or {}).items():
-            name = result.get('requested_command', command)
-            if name not in ACTIONS or type(result.get('tx_id')) is not int:
-                continue
-            if name in results and result['tx_id'] <= results[name]['id']:
-                continue
-            results[name] = dict(id=result['tx_id'], state=result.get('state'),
-                                 acknowledged=bool(result.get('acknowledged_at')),
-                                 confirmedStopped=result.get('confirmed_stopped') is True)
-        return {
-            'setupUrl': self.setup_url,
-            'authority': {
-                'controller': self._controller_id(token), 'connectionId': state['connection_id'],
-                'stopGeneration': state['stop_generation'],
-            },
-            'sequence': state['sequence'], 'connected': connected, 'transport': transport,
-            'armed': state.get('armed') is True, 'fresh': fresh, 'motion': motion, 'speed': speed,
-            'fault': report.get('fault_code') if fresh else None,
-            'statusAge': age, 'motionBlock': motion_block, 'error': state.get('error'),
-            'canStop': connected and direct, 'canQuery': connected and not state.get('recipe_active'),
-            'haltPending': state.get('halt_pending') is True,
-            'results': results,
-        }
+        return status_view(state, self._controller_id(token), setup_url=self.setup_url)
 
     def status(self):
         for _ in range(2):
@@ -168,6 +179,14 @@ class AgvClient:
         raise ControllerUnavailable('The AGV controller session changed. Refresh the status.')
 
     def command(self, body):
+        if self.native:
+            token = self._credential()
+            code, data = self._http('/api/agv/command', token=token, body=body)
+            if code == 403:
+                self._forget(token)
+                raise ValueError('The AGV controller session changed. Review the link before sending again.')
+            return self._decode(code, data)
+
         action = body.get('action')
         authority = body.get('authority')
         if not isinstance(action, str) or action not in ACTIONS:

@@ -1,7 +1,7 @@
 export type Mode = 'automatic' | 'manual'
 export type Quality = 'live' | 'stale' | 'unavailable'
 
-export type AgvAction = 'arm' | 'disarm' | 'query_status' | 'stop'
+export type AgvAction = 'connect' | 'disconnect' | 'arm' | 'disarm' | 'query_status' | 'stop'
   | 'forward' | 'reverse' | 'rotate_clockwise' | 'rotate_counterclockwise'
 
 export interface AgvAuthority {
@@ -11,7 +11,10 @@ export interface AgvAuthority {
 }
 
 export interface AgvStatus {
-  setupUrl: string
+  setupUrl: string | null
+  linkMode?: 'simulator' | 'serial' | 'wired'
+  canConnect?: boolean
+  canDisconnect?: boolean
   authority: AgvAuthority
   sequence: number
   connected: boolean
@@ -66,6 +69,7 @@ export interface RecipeLibrary {
 export type Page = 'run' | 'manual' | 'recipes' | 'settings' | 'agv'
 
 export type TankControlId = 'cycle' | 'filter' | 'heater' | 'ultrasonic' | 'door' | 'swing' | 'rectifier' | 'pressure'
+export type DoorPilotAction = 'open' | 'close' | 'clear' | 'resolve'
 
 export interface TankControl {
   id: TankControlId
@@ -78,7 +82,8 @@ export interface Tank {
   name: string
   temperature: number | null
   timer: number | null
-  timerDone: boolean
+  timerDone: boolean | null
+  doorPosition?: 'Open' | 'Closed' | 'Between limits' | 'Conflicting feedback' | 'Unavailable' | null
   alarm: string | null
   details: { label: string; value: string }[]
   fields: Field[]
@@ -105,11 +110,12 @@ export interface Recipe extends RecipeSummary {
 }
 
 export interface LineStatus {
-  mode: Mode
+  mode: Mode | null
   simulation: boolean
-  plc: { quality: Quality; sampleTime: string; remote: boolean }
-  agv: { station: number; stationConfirmed: boolean; destination: number | null; moving: boolean }
-  scenario: { lowWater: boolean; timeScale: number }
+  plc: { quality: Quality; sampleTime: string | null; remote: boolean | null }
+  doorPilot?: { tank: number; revision: string | null; nextAction: DoorPilotAction | null; message: string }
+  agv: { station: number | null; stationConfirmed: boolean; destination: number | null; moving: boolean }
+  scenario: { lowWater: boolean; timeScale: number } | null
   run: {
     state: 'idle' | 'running' | 'stopped' | 'complete'
     step: number | null
@@ -127,6 +133,7 @@ export type Command =
   | { action: 'mode'; mode: Mode }
   | { action: 'settings'; tank: number; values: Record<string, number> }
   | { action: 'tank-control'; tank: number; control: TankControlId; active: boolean }
+  | { action: 'plc-door'; tank: number; operation: DoorPilotAction; revision: string; confirmed: true }
   | { action: 'move'; tank: number }
   | { action: 'simulation'; lowWater: boolean; quality: Quality }
   | { action: 'select-recipe'; id: string }

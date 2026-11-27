@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AgvControls from './AgvControls.vue'
 import RecipesPage from './RecipesPage.vue'
 import RunBar from './RunBar.vue'
-import SequenceList from './SequenceList.vue'
 import SettingsPage from './SettingsPage.vue'
 import TankPanel from './TankPanel.vue'
 import TrackMap from './TrackMap.vue'
@@ -36,17 +35,18 @@ const controlsDisabled = computed(() => busy.value || !connected.value || active
 const freshData = computed(() => connected.value && status.value?.plc.quality === 'live')
 const alarms = computed(() => status.value?.tanks.filter(item => item.alarm) ?? [])
 const pageMode = computed(() => PAGE_MODE[page.value])
-const modeMismatch = computed(() => !!status.value && !!pageMode.value && status.value.mode !== pageMode.value)
+const modeMismatch = computed(() => status.value?.simulation && !!pageMode.value && status.value.mode !== pageMode.value)
 const age = computed(() => {
-  if (!status.value) return ''
-  const seconds = Math.max(0, Math.floor((wallTime.value - Date.parse(status.value.plc.sampleTime)) / 1000))
+  const stamp = status.value?.plc.sampleTime
+  if (!stamp) return ''
+  const seconds = Math.max(0, Math.floor((wallTime.value - Date.parse(stamp)) / 1000))
   return seconds < 60 ? `${seconds} s ago` : `${Math.floor(seconds / 60)} min ago`
 })
 const plcLabel = computed(() => {
   const plc = status.value?.plc
   if (!plc) return '—'
   if (!connected.value) return 'Disconnected'
-  if (plc.quality === 'live') return plc.remote ? 'Remote' : 'Local'
+  if (plc.quality === 'live') return plc.remote === null ? 'Mode unknown' : plc.remote ? 'Remote' : 'Local'
   return plc.quality === 'stale' ? 'Data stale' : 'Unavailable'
 })
 
@@ -114,7 +114,7 @@ async function command(action: Command): Promise<boolean> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(action),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(action.action === 'plc-door' ? 10000 : 5000),
     })
     if (action.action === 'settings') notice.value = `Settings confirmed for tank #${action.tank}.`
     else if (action.action === 'move') notice.value = `Move to tank #${action.tank} requested.`
@@ -122,7 +122,11 @@ async function command(action: Command): Promise<boolean> {
     if (action.action === 'reset') selected.value = 1
     return true
   } catch (failure) {
-    error.value = failure instanceof Error ? failure.message : 'Could not reach the line service.'
+    if (action.action === 'plc-door' && (failure instanceof DOMException || failure instanceof TypeError)) {
+      error.value = 'Door request outcome is unknown. Check the door and PLC feedback before continuing.'
+    } else {
+      error.value = failure instanceof Error ? failure.message : 'Could not reach the line service.'
+    }
     return false
   } finally {
     busy.value = false
@@ -136,7 +140,7 @@ watch(notice, value => {
 })
 
 function switchMode(mode: Mode) {
-  if (status.value?.mode === mode) return
+  if (!status.value?.simulation || status.value.mode === mode) return
   void command({ action: 'mode', mode })
 }
 
@@ -144,7 +148,7 @@ function switchMode(mode: Mode) {
 function go(target: Page) {
   if (!navigate(target)) return
   const mode = PAGE_MODE[target]
-  if (mode && status.value && status.value.mode !== mode && !controlsDisabled.value) switchMode(mode)
+  if (mode && !controlsDisabled.value) switchMode(mode)
 }
 
 function tankName(id: number) {
@@ -210,12 +214,12 @@ onUnmounted(() => {
             <dt>Tank PLC</dt>
             <dd>
               <strong><i class="dot" aria-hidden="true"></i>{{ plcLabel }}</strong>
-              <small>{{ freshData ? 'Readings up to date' : `Last good reading ${age}` }}</small>
+              <small>{{ freshData ? 'Readings up to date' : age ? `Last good reading ${age}` : 'Awaiting PLC data' }}</small>
             </dd>
           </div>
           <div class="status-tile" :class="{ moving: connected && status.agv.moving }">
             <dt>AGV</dt>
-            <dd>
+            <dd v-if="status.agv.station !== null">
               <strong v-if="connected && status.agv.moving"><i class="dot" aria-hidden="true"></i>Moving to #{{ status.agv.destination }}</strong>
               <strong v-else-if="connected && status.agv.stationConfirmed"><i class="dot" aria-hidden="true"></i>At tank #{{ status.agv.station }}</strong>
               <strong v-else><i class="dot" aria-hidden="true"></i>Last seen at #{{ status.agv.station }}</strong>
@@ -223,9 +227,10 @@ onUnmounted(() => {
               <small v-else-if="connected && !status.agv.stationConfirmed">Stopped between stations</small>
               <small v-else>{{ tankName(status.agv.station) }}</small>
             </dd>
+            <dd v-else><strong>Station unavailable</strong><small>See AGV jog for link status</small></dd>
           </div>
           <div class="status-tile" :class="{ alarm: freshData && alarms.length > 0, caution: !freshData }">
-            <dt>Alarms</dt>
+            <dt>{{ status.simulation ? 'Alarms' : 'Tank alarms' }}</dt>
             <dd>
               <component
                 :is="freshData && alarms.length ? 'button' : 'span'"
@@ -234,7 +239,7 @@ onUnmounted(() => {
                 @click="selectFirstAlarm"
               >
                 <strong><i class="dot" aria-hidden="true"></i>{{ freshData ? alarms.length ? `${alarms.length} active` : 'None' : '—' }}</strong>
-                <small>{{ !freshData ? 'Fresh PLC data required' : alarms.length ? alarms[0].alarm : 'No active tank alarms' }}</small>
+                <small>{{ !freshData ? 'Fresh PLC data required' : alarms.length ? alarms[0].alarm : 'No tank alarms reported' }}</small>
               </component>
             </dd>
           </div>
@@ -242,6 +247,7 @@ onUnmounted(() => {
         <a v-if="status?.simulation" href="/settings" data-nav="settings" class="environment" title="Simulation controls are on the Settings page">
           <i aria-hidden="true"></i> Simulation
         </a>
+        <span v-else-if="status" class="environment environment-monitor">{{ status.doorPilot ? 'PLC door pilot' : 'PLC monitor' }}</span>
       </div>
     </header>
 
@@ -275,10 +281,7 @@ onUnmounted(() => {
             @select="id => selected = id"
           />
           <TrackMap class="area-map" :status="status" :selected="selected" :connected="connected" @select="id => selected = id" />
-          <div class="area-side">
-            <TankPanel :tank="tank" :status="status" :disabled="controlsDisabled" @command="command" />
-            <SequenceList :status="status" :connected="connected" :selected="selected" @select="id => selected = id" />
-          </div>
+          <TankPanel class="area-side" :tank="tank" :status="status" :disabled="controlsDisabled" @command="command" />
         </div>
 
         <div v-else-if="page === 'manual' && tank" class="manual-page">
@@ -287,8 +290,8 @@ onUnmounted(() => {
             :status="status"
             :selected="selected"
             :connected="connected"
-            title="Manual control"
-            hint="Select a tank to access its controls, PLC settings, and AGV move command."
+            :title="status.simulation ? 'Manual control' : 'Tank monitor'"
+            :hint="status.simulation ? 'Select a tank to access its controls, PLC settings, and AGV move command.' : 'Select a tank to view its PLC readings and equipment status.'"
             @select="id => selected = id"
           >
             <template #actions>

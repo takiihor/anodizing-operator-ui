@@ -30,7 +30,6 @@ FIELDS = {
     'swing': ('Swing speed', 'cycles/min', 5, 120, 1, 'SwingSV'),
 }
 SWING_TANKS = {3, 5, 10, 14}
-DOOR_TANKS = {1, 3, 5, 7, 10, 12, 14}
 TIME_SCALE = 60
 LOW_WATER = 'Tank #1 low water level'
 MAX_RECIPE_STEPS = 64
@@ -373,7 +372,7 @@ class OperatorLine:
             remaining = ceil((deadline - now) * TIME_SCALE) if deadline is not None else 0
             equipment = self.equipment[tank]
             details = [{'label': 'Basket', 'value': 'Present' if processing is not None else 'Empty'}]
-            if tank in DOOR_TANKS or 'door' in equipment:
+            if 'door' in equipment:
                 details.append({'label': 'Door', 'value': 'Open' if equipment.get('door') else 'Closed'})
             if tank == 7:
                 details.extend((

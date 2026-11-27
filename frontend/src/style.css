@@ -78,6 +78,8 @@ h3 { font-size: .93rem; }
 .environment { text-decoration: none; display: inline-flex; align-items: center; gap: 7px; border: 1px solid #5b4a26; background: #2b2416; border-radius: 99px; color: #f6d9a1; padding: 4px 11px; font-size: .76rem; font-weight: 650; letter-spacing: .02em; }
 .environment:hover { background: #3a301c; }
 .environment i { width: 7px; height: 7px; border-radius: 50%; background: #f2b13e; }
+.environment-monitor { color: #cbe3ff; background: #203753; border-color: #45658c; }
+.environment-monitor:hover { background: #203753; }
 
 .page-nav { display: flex; gap: 4px; align-items: center; }
 .page-nav a { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 16px; border-radius: 8px; color: var(--header-muted); text-decoration: none; font-weight: 680; font-size: .95rem; white-space: nowrap; }
@@ -199,7 +201,8 @@ input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color:
 
 .progress { list-style: none; margin: 0; padding: 10px 18px 12px; display: flex; gap: 4px; border-top: 1px solid var(--border); background: var(--surface-2); overflow-x: auto; }
 .progress li { flex: 1 1 0; min-width: 48px; position: relative; }
-.progress button { width: 100%; display: grid; justify-items: center; gap: 0; padding: 5px 2px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); line-height: 1.15; }
+.progress :is(.is-current, .is-next, .is-halted) { min-width: 78px; }
+.progress button { width: 100%; height: 100%; display: grid; justify-items: center; gap: 0; padding: 5px 2px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); line-height: 1.15; }
 .progress button:hover { border-color: var(--accent); }
 .progress-step { font-size: .68rem; font-weight: 650; color: var(--muted); }
 .progress-tank { font-size: .86rem; font-weight: 750; font-variant-numeric: tabular-nums; }
@@ -207,6 +210,8 @@ input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color:
 .progress .is-done .progress-step::before { content: "✓ "; }
 .progress .is-current button { background: var(--run); border-color: var(--run); color: #fff; box-shadow: 0 0 0 3px var(--run-soft); }
 .progress .is-current .progress-step { color: #d6f1e0; }
+.progress .is-next button { background: var(--accent-soft); border: 1px dashed var(--accent); color: var(--accent-strong); }
+.progress .is-next .progress-step { color: inherit; }
 .progress .is-halted button { background: var(--caution-soft); border-color: #e0a030; color: var(--caution); }
 .progress .has-issue button { border-color: var(--alarm); background: var(--alarm-soft); color: var(--alarm-strong); }
 .progress .has-issue .progress-step { color: var(--alarm-strong); }
@@ -222,8 +227,7 @@ input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color:
 .run-page { grid-template-columns: minmax(0, 1fr) 420px; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "bar side" "map side"; }
 .run-page .area-bar { grid-area: bar; }
 .run-page .area-map { grid-area: map; }
-.run-page .area-side { grid-area: side; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-.run-page .area-side .tank-panel { flex: 0 1 auto; min-height: 220px; }
+.run-page .area-side { grid-area: side; }
 .manual-page { grid-template-columns: minmax(0, 1fr) 460px; grid-template-areas: "map side"; }
 .manual-page .area-map { grid-area: map; }
 .manual-page .area-side { grid-area: side; }
@@ -305,6 +309,7 @@ input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color:
 .readings span { font-size: .75rem; color: var(--muted); font-weight: 600; }
 .readings strong { font-size: 1.75rem; line-height: 1.1; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .readings strong small { font-size: .9rem; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+.readings .door-position { font-size: 1.15rem; letter-spacing: 0; }
 .readings strong.is-stale { color: #8a94a2; }
 
 .settings, .tank-controls { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -344,27 +349,6 @@ input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color:
 /* ── Tables ───────────────────────────────────────────────── */
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: .87rem; }
 th, td { padding: 8px 10px; white-space: nowrap; }
-
-/* ── Sequence list (Run page) ─────────────────────────────── */
-.sequence-panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 160px; }
-.sequence-panel .panel-heading { border-bottom: 1px solid var(--border); flex: none; }
-.sequence-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; flex: 1; min-height: 0; }
-.sequence-list button { width: 100%; display: grid; grid-template-columns: 14px 22px 36px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 7px 16px; border: 0; background: none; text-align: left; font-size: .87rem; }
-.sequence-list button:hover { background: var(--surface-2); }
-.sequence-list li + li button { border-top: 1px solid var(--surface-3); }
-.seq-state { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border-strong); }
-.seq-step { font-weight: 650; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
-.seq-tank { font-weight: 800; font-variant-numeric: tabular-nums; }
-.seq-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seq-values { display: flex; gap: 10px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.seq-issue { font-size: .72rem; font-weight: 800; color: var(--caution); background: var(--caution-soft); border: 1px solid var(--caution-line); border-radius: 99px; padding: 1px 7px; }
-.sequence-list .row-selected button { background: var(--accent-soft); }
-.sequence-list .row-current button { background: var(--run-soft); font-weight: 700; }
-.sequence-list .row-done button { color: var(--muted); }
-.sequence-list .row-done .seq-values { color: var(--muted); }
-.state-done { background: #8e9bab; border-color: #8e9bab; }
-.state-current { background: var(--run); border-color: var(--run); box-shadow: 0 0 0 3px var(--run-line); animation: pulse 1.4s ease-in-out infinite; }
-.state-halted { background: #e0a030; border-color: #e0a030; }
 
 /* ── Shared form bits ─────────────────────────────────────── */
 .field { display: grid; gap: 4px; min-width: 0; }
@@ -529,7 +513,6 @@ fieldset { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
   .recipes-page .recipe-side, .settings-page .settings-side { grid-template-columns: minmax(0, 1fr); flex-direction: column; }
   .step-scroll { max-height: 60vh; }
   .library-list, .tank-list { max-height: 40vh; }
-  .sequence-list { max-height: 50vh; }
   .map-scroll-hint { display: block; padding: 0 18px 12px; color: var(--muted); font-size: .76rem; }
 }
 @media (max-width: 1100px) {
@@ -572,4 +555,4 @@ fieldset { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 }
 
 /* Scroll containers anchor their visually hidden labels, so those labels cannot stretch the window. */
-.sequence-list, .step-scroll, .tank-panel, .library-list, .tank-list, .tank-setup, .settings-side, .route-chips, .page { position: relative; }
+.step-scroll, .tank-panel, .library-list, .tank-list, .tank-setup, .settings-side, .route-chips, .page { position: relative; }

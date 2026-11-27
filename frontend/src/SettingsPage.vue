@@ -71,10 +71,12 @@ function lockedCount(id: number) {
 }
 
 function changeScenario(change: { quality?: Quality; lowWater?: boolean }) {
+  const scenario = props.status.scenario
+  if (!scenario) return
   void props.command({
     action: 'simulation',
     quality: change.quality ?? props.status.plc.quality,
-    lowWater: change.lowWater ?? props.status.scenario.lowWater,
+    lowWater: change.lowWater ?? scenario.lowWater,
   })
 }
 
@@ -169,7 +171,7 @@ onUnmounted(() => setUnsavedCheck(undefined))
         </ul>
       </section>
 
-      <section v-if="status.simulation" class="panel simulation-panel" aria-labelledby="simulation-title">
+      <section v-if="status.scenario" class="panel simulation-panel" aria-labelledby="simulation-title">
         <div class="panel-heading">
           <div>
             <h2 id="simulation-title">Simulation</h2>

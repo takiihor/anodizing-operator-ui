@@ -14,7 +14,7 @@ const movements = [
 ] as const
 
 const link = ref<AgvStatus>()
-const setupUrl = ref('http://127.0.0.1:8870/operator/#/agv')
+const setupUrl = ref<string | null>(null)
 const busy = ref(false)
 const stopping = ref(false)
 const connectionError = ref('')
@@ -49,6 +49,10 @@ function apply(next: AgvStatus, order: number) {
 const motionBlock = computed(() => connectionError.value || link.value?.motionBlock || '')
 const canArm = computed(() => !motionBlock.value && link.value?.motion === 'stopped' && !busy.value && !stopping.value)
 const canMove = computed(() => !motionBlock.value && Boolean(armedHere.value) && !busy.value && !stopping.value)
+const linkLabel = computed(() => {
+  const mode = link.value?.linkMode ?? link.value?.transport
+  return mode === 'simulator' ? 'AGV simulator' : mode === 'serial' ? 'Framed serial link' : mode === 'wired' ? 'Wired RS-485 · Status only' : 'AGV controller'
+})
 const outcome = computed(() => {
   const command = watched.value
   const current = link.value
@@ -87,6 +91,8 @@ async function send(action: AgvAction) {
   const authority = link.value?.authority
   const priority = action === 'stop'
   if (!authority || stopping.value || (!priority && busy.value)) return
+  const confirmed = action === 'arm' && link.value?.linkMode === 'serial'
+  if (confirmed && !window.confirm('Confirm the AGV travel area is clear and the mounted robot is in its approved travel position.')) return
   if (priority) {
     stopping.value = true
     armedHere.value = undefined
@@ -101,12 +107,14 @@ async function send(action: AgvAction) {
     const next = await props.request('command', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, authority }),
+      body: JSON.stringify({ action, authority, confirmed }),
       signal: AbortSignal.timeout(9500),
     })
     apply(next, order)
     if (attempt !== commandOrder) return
-    if (action === 'arm' && link.value?.armed && sameConnection(authority, link.value.authority)
+    if (action === 'connect' || action === 'disconnect') {
+      notice.value = next.connected ? 'AGV link connected.' : 'AGV link disconnected.'
+    } else if (action === 'arm' && link.value?.armed && sameConnection(authority, link.value.authority)
       && link.value.authority.stopGeneration === authority.stopGeneration) {
       armedHere.value = authority
       notice.value = 'AGV armed.'
@@ -144,7 +152,7 @@ onUnmounted(() => clearInterval(timer))
       <div class="panel-heading">
         <div>
           <h1 id="agv-title">AGV manual controls</h1>
-          <p>{{ link?.transport === 'simulator' ? 'Controller simulator' : link?.transport === 'serial' ? 'Serial / radio link' : 'Robot service' }}</p>
+          <p>{{ linkLabel }}</p>
         </div>
         <button class="button danger large" type="button" :disabled="!link?.canStop || stopping" @click="send('stop')">
           <span class="stop-mark" aria-hidden="true"></span>{{ stopping ? 'Requesting Stop…' : 'Stop AGV' }}
@@ -171,7 +179,9 @@ onUnmounted(() => clearInterval(timer))
       </dl>
       <div class="agv-command-panel">
         <div class="agv-link-actions">
-          <a :href="setupUrl" class="button secondary button-link">Controller setup</a>
+          <a v-if="setupUrl" :href="setupUrl" class="button secondary button-link">Controller setup</a>
+          <button v-if="link?.canConnect" class="button secondary" type="button" :disabled="busy || stopping || !!connectionError" @click="send('connect')">Connect {{ link.linkMode === 'simulator' ? 'simulator' : 'AGV' }}</button>
+          <button v-else-if="link?.linkMode && link.connected" class="button secondary" type="button" :disabled="!link.canDisconnect || busy || stopping || !!connectionError" @click="send('disconnect')">Disconnect</button>
           <button class="button secondary" type="button" :disabled="!link?.canQuery || busy || stopping" @click="send('query_status')">Query status</button>
           <button v-if="armedHere" class="button secondary" type="button" :disabled="busy || stopping" @click="send('disarm')">Disarm</button>
           <button v-else class="button primary" type="button" :disabled="!canArm" @click="send('arm')">Arm AGV</button>

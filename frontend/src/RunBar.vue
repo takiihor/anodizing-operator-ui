@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Command, LineStatus } from './types'
 
 const props = defineProps<{
@@ -16,8 +16,11 @@ const run = computed(() => props.status.run)
 const steps = computed(() => props.status.recipe.steps)
 const blocked = computed(() => props.connected && run.value.blockers.length > 0)
 const currentStep = computed(() => run.value.step !== null ? steps.value[run.value.step] : undefined)
+const activeIndex = computed(() => run.value.state === 'running' ? run.value.step : null)
+const strip = ref<HTMLOListElement>()
 
 const runLabel = computed(() => {
+  if (!props.status.simulation) return 'PLC monitoring'
   if (!props.connected) return 'Disconnected'
   if (!automatic.value) return 'Line in Manual'
   if (run.value.state === 'running') return run.value.phase === 'travel' ? 'AGV travelling' : 'Processing'
@@ -42,15 +45,46 @@ const blockerTanks = computed(() => new Set(run.value.blockers.map(blockerTank).
 
 const progress = computed(() => steps.value.map((step, index) => {
   const { state, step: current } = run.value
-  let tone: 'pending' | 'done' | 'current' | 'halted' = 'pending'
+  let tone: 'pending' | 'done' | 'current' | 'next' | 'halted' = 'pending'
   if (state === 'complete') tone = 'done'
   else if (current !== null && (state === 'running' || state === 'stopped')) {
     if (index < current) tone = 'done'
     else if (index === current) tone = state === 'running' ? 'current' : 'halted'
+    else if (state === 'running' && index === current + 1) tone = 'next'
   }
-  return { ...step, index, tone, issue: props.connected && state !== 'running' && blockerTanks.value.has(step.tank) }
+  const issues: string[] = []
+  if (props.connected && props.status.plc.quality === 'live') {
+    const fields = props.status.tanks.find(tank => tank.id === step.tank)?.fields
+    const time = fields?.find(field => field.key === 'time')?.value
+    const temperature = fields?.find(field => field.key === 'temperature')?.value
+    if (time != null && time !== step.plcTime) issues.push(`PLC time ${time} s, target ${step.plcTime} s`)
+    if (temperature != null && step.temperature !== null && temperature !== step.temperature) {
+      issues.push(`PLC temperature ${temperature} °C, target ${step.temperature} °C`)
+    }
+  }
+  const stateLabel = { pending: '', done: 'Done', current: 'Current', next: 'Next', halted: 'Stopped' }[tone]
+  const label = [`Step ${index + 1}, tank #${step.tank} ${tankName(step.tank)}`, stateLabel,
+    `${step.dwell} s process`, step.temperature === null ? '' : `${step.temperature} °C target`, ...issues].filter(Boolean).join(' · ')
+  return { ...step, index, tone, stateLabel, label,
+    issue: props.connected && state !== 'running' && (issues.length > 0 || blockerTanks.value.has(step.tank)) }
 }))
 const doneCount = computed(() => progress.value.filter(step => step.tone === 'done').length)
+
+watch([strip, activeIndex, () => props.status.recipe.id, () => props.status.recipe.revision], ([list, index], previous) => {
+  if (!list) return
+  if (index === null) {
+    if (!previous[0] || previous[2] !== props.status.recipe.id || previous[3] !== props.status.recipe.revision) list.scrollLeft = 0
+    return
+  }
+  const current = list.children[index]
+  if (!current) return
+  const last = current.nextElementSibling ?? current
+  const viewport = list.getBoundingClientRect()
+  const left = current.getBoundingClientRect().left - viewport.left
+  const right = last.getBoundingClientRect().right - viewport.right
+  if (left < 0) list.scrollLeft += left - 6
+  else if (right > -6) list.scrollLeft += right + 6
+}, { flush: 'post' })
 
 function tankName(id: number) {
   return props.status.tanks.find(item => item.id === id)?.name ?? ''
@@ -81,12 +115,13 @@ async function selectRecipe(event: Event) {
       </div>
 
       <div class="run-state">
-        <h2 id="run-title" class="eyebrow">Automatic run</h2>
+        <h2 id="run-title" class="eyebrow">{{ status.simulation ? 'Automatic run' : 'Line status' }}</h2>
         <p class="run-headline">
           <span class="run-status" :class="`tone-${runTone}`"><i aria-hidden="true"></i>{{ runLabel }}</span>
         </p>
         <p id="run-description" class="run-description" role="status">
-          <template v-if="!connected">Reconnect to control the recipe.</template>
+          <template v-if="!status.simulation">Recipe execution is disabled in PLC monitor mode.</template>
+          <template v-else-if="!connected">Reconnect to control the recipe.</template>
           <template v-else-if="!automatic">Switch the line to Automatic to run a recipe.</template>
           <template v-else-if="run.state === 'running' && run.step !== null && currentStep">
             <strong>Step {{ run.step + 1 }} of {{ steps.length }}</strong>
@@ -102,7 +137,7 @@ async function selectRecipe(event: Event) {
         </p>
       </div>
 
-      <div class="run-actions" role="group" aria-label="Automatic recipe actions">
+      <div v-if="status.simulation" class="run-actions" role="group" aria-label="Automatic recipe actions">
         <button
           type="button"
           class="button primary large"
@@ -120,15 +155,16 @@ async function selectRecipe(event: Event) {
       </div>
     </div>
 
-    <ol v-if="steps.length" class="progress" :aria-label="`Recipe progress, ${doneCount} of ${steps.length} steps done`">
+    <ol v-if="steps.length" ref="strip" class="progress" :aria-label="status.simulation ? `Recipe sequence, ${doneCount} of ${steps.length} steps done` : 'Selected recipe sequence'">
       <li v-for="step in progress" :key="step.index" :class="[`is-${step.tone}`, { 'has-issue': step.issue }]">
         <button
           type="button"
-          :aria-label="`Step ${step.index + 1}, tank #${step.tank} ${tankName(step.tank)}${step.tone === 'done' ? ', done' : step.tone === 'current' ? ', in progress' : step.tone === 'halted' ? ', stopped here' : ''}${step.issue ? ', needs attention' : ''}`"
+          :aria-label="step.issue ? `${step.label} · Needs attention` : step.label"
+          :title="step.issue ? `${step.label} · Needs attention` : step.label"
           :aria-current="step.tone === 'current' ? 'step' : undefined"
           @click="$emit('select', step.tank)"
         >
-          <span class="progress-step">{{ step.index + 1 }}</span>
+          <span class="progress-step">{{ step.index + 1 }}<template v-if="step.stateLabel && step.tone !== 'done'"> · {{ step.stateLabel }}</template></span>
           <span class="progress-tank">#{{ step.tank }}</span>
         </button>
       </li>

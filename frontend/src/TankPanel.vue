@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { Command, Field, LineStatus, Tank, TankControl } from './types'
+import type { Command, DoorPilotAction, Field, LineStatus, Tank, TankControl } from './types'
 
 const props = defineProps<{ tank: Tank; status: LineStatus; disabled: boolean; showControls?: boolean }>()
 const emit = defineEmits<{ command: [command: Command] }>()
@@ -19,6 +19,8 @@ const alarmActive = computed(() => Boolean(props.tank.alarm) && live.value)
 const hasTemperature = computed(() => fields.value.some(field => field.key === 'temperature'))
 const agvAtTank = computed(() => props.status.agv.stationConfirmed && props.status.agv.station === props.tank.id)
 const agvHeading = computed(() => props.status.agv.destination === props.tank.id)
+const doorPilot = computed(() => props.showControls && props.status.doorPilot?.tank === props.tank.id
+  ? props.status.doorPilot : undefined)
 const canEdit = computed(() => manual.value && !props.disabled && live.value && props.status.plc.remote)
 const changed = computed(() =>
   fields.value.filter(field => field.editable && field.value !== null && String(field.value) !== String(draft.value[field.key] ?? '')),
@@ -52,6 +54,19 @@ function controlState(control: TankControl) {
   if (control.id === 'cycle') return control.active ? 'Running' : 'Idle'
   if (control.id === 'door') return control.active ? 'Open' : 'Closed'
   return control.active ? 'On' : 'Off'
+}
+
+function sendDoor(operation: DoorPilotAction) {
+  const pilot = doorPilot.value
+  if (props.disabled || !live.value || !pilot?.revision || pilot.nextAction !== operation) return
+  const messages = {
+    open: 'Open the physical door on tank #1? Confirm that the area is clear and you can observe the movement.',
+    close: 'Close the physical door on tank #1? Confirm that the area is clear and you can observe the movement.',
+    clear: 'Confirm that you observed the door on tank #1 reach its requested position and stop moving. Clear the PLC command?',
+    resolve: 'Confirm that you inspected the door on tank #1 and verified at the line that both PLC commands are clear.',
+  }
+  if (!window.confirm(messages[operation])) return
+  emit('command', { action: 'plc-door', tank: pilot.tank, operation, revision: pilot.revision, confirmed: true })
 }
 
 function revealInvalid(event: Event) {
@@ -104,7 +119,25 @@ function submit() {
             <template v-else>{{ tank.timer }}<small> s</small></template>
           </strong>
         </div>
+        <div v-if="tank.doorPosition">
+          <span>Door position</span>
+          <strong class="door-position" :class="{ 'is-stale': !live }">{{ tank.doorPosition }}</strong>
+        </div>
       </div>
+
+      <section v-if="doorPilot" class="tank-controls" aria-labelledby="door-pilot-title">
+        <div class="settings-heading">
+          <h3 id="door-pilot-title">Door control</h3>
+          <span class="plc-mode">Live PLC</span>
+        </div>
+        <p class="hint" role="status">{{ live ? doorPilot.message : 'Fresh PLC feedback is required.' }}</p>
+        <div class="tank-control-grid">
+          <button type="button" class="button secondary" :disabled="disabled || !live || doorPilot.nextAction !== 'open'" @click="sendDoor('open')">Open door</button>
+          <button type="button" class="button secondary" :disabled="disabled || !live || doorPilot.nextAction !== 'close'" @click="sendDoor('close')">Close door</button>
+        </div>
+        <button v-if="doorPilot.nextAction === 'clear'" type="button" class="button primary" :disabled="disabled || !live" @click="sendDoor('clear')">Clear PLC command</button>
+        <button v-if="doorPilot.nextAction === 'resolve'" type="button" class="button secondary" :disabled="disabled || !live" @click="sendDoor('resolve')">Acknowledge after inspection</button>
+      </section>
 
       <details v-if="tank.details.length" class="disclosure">
         <summary>More status</summary>
@@ -115,10 +148,10 @@ function submit() {
 
       <section v-if="showControls && tank.controls?.length" class="tank-controls" aria-labelledby="tank-controls-title">
         <div class="settings-heading">
-          <h3 id="tank-controls-title">Tank controls</h3>
-          <span class="plc-mode">Simulation</span>
+          <h3 id="tank-controls-title">{{ status.simulation ? 'Tank controls' : 'Equipment status' }}</h3>
+          <span v-if="status.simulation" class="plc-mode">Simulation</span>
         </div>
-        <div class="tank-control-grid">
+        <div v-if="status.simulation" class="tank-control-grid">
           <button
             v-for="control in tank.controls"
             :key="control.id"
@@ -133,12 +166,17 @@ function submit() {
             <small>{{ controlState(control) }}</small>
           </button>
         </div>
+        <dl v-else class="status-list">
+          <div v-for="control in tank.controls" :key="control.id">
+            <dt>{{ control.label }}</dt><dd>{{ controlState(control) }}</dd>
+          </div>
+        </dl>
       </section>
 
       <form class="settings" @invalid.capture="revealInvalid" @submit.prevent="submit">
         <div class="settings-heading">
           <h3>Settings</h3>
-          <span v-if="live" class="plc-mode">PLC {{ status.plc.remote ? 'Remote' : 'Local' }}</span>
+          <span v-if="live && status.plc.remote !== null" class="plc-mode">PLC {{ status.plc.remote ? 'Remote' : 'Local' }}</span>
         </div>
         <table class="setpoints">
           <thead>
@@ -205,7 +243,7 @@ function submit() {
         :disabled="disabled || agvAtTank"
         @click="$emit('command', { action: 'move', tank: tank.id })"
       >{{ agvAtTank ? 'AGV is at this tank' : `Move AGV to tank #${tank.id}` }}</button>
-      <p v-else class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
+      <p v-else-if="status.simulation" class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
     </div>
   </section>
 </template>

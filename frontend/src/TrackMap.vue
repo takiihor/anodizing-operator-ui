@@ -115,8 +115,8 @@ function formatTimer(seconds: number) {
           <span><i class="key key-recipe"></i>In recipe</span>
           <span><i class="key key-unused"></i>Skipped</span>
           <span><i class="key key-step">1</i>Visit order</span>
-          <span><i class="key key-agv"></i>{{ agvConfirmed ? 'AGV' : 'Last confirmed AGV' }}</span>
-          <span><i class="key key-destination"></i>Destination</span>
+          <span v-if="status.agv.station !== null"><i class="key key-agv"></i>{{ agvConfirmed ? 'AGV' : 'Last confirmed AGV' }}</span>
+          <span v-if="status.simulation"><i class="key key-destination"></i>Destination</span>
           <span><i class="key key-alarm">!</i>Alarm</span>
         </div>
 
@@ -173,6 +173,7 @@ function formatTimer(seconds: number) {
           aria-hidden="true"
         ></span>
         <span
+          v-if="status.agv.station !== null"
           class="vehicle"
           :class="{ 'is-unconfirmed': !agvConfirmed, 'is-moving': connected && status.agv.moving }"
           :style="markerStyle(status.agv.station)"
