@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AgvControls from './AgvControls.vue'
+import AgvTelemetry from './AgvTelemetry.vue'
 import JobGatewayStatusPanel from './JobGatewayStatus.vue'
 import RecipesPage from './RecipesPage.vue'
 import RunBar from './RunBar.vue'
 import SettingsPage from './SettingsPage.vue'
 import TankPanel from './TankPanel.vue'
 import TrackMap from './TrackMap.vue'
+import { emptyTracking, updateTracking } from './agvTravel'
+import type { AgvTracking } from './agvTravel'
 import { navigate, page, TITLES } from './router'
 import type { AgvStatus, Command, GatewayAgvStatus, JobGatewayStatus, LineStatus, Mode, Page, RecipeLibrary } from './types'
 
@@ -20,6 +23,7 @@ const notice = ref('')
 const wallTime = ref(Date.now())
 const ipcAgv = ref<GatewayAgvStatus['device']>()
 const ipcAgvError = ref(false)
+const ipcTracking = ref<AgvTracking>(emptyTracking)
 let poll: AbortController | undefined
 let ipcAgvPoll: AbortController | undefined
 let timer: ReturnType<typeof setInterval> | undefined
@@ -31,8 +35,14 @@ const PAGE_MODE: Partial<Record<Page, Mode>> = { run: 'automatic', manual: 'manu
 
 const status = computed<LineStatus | undefined>(() => {
   const current = snapshot.value
-  if (!current || connected.value || current.plc.quality !== 'live') return current
-  return { ...current, plc: { ...current.plc, quality: 'stale' } }
+  if (!current) return
+  const plc = connected.value || current.plc.quality !== 'live'
+    ? current.plc : { ...current.plc, quality: 'stale' as const }
+  if (current.agvSource !== 'ipc-gateway') return { ...current, plc }
+  const freshAgv = connected.value && ipcAgv.value?.fresh
+  const atTank = freshAgv ? ipcAgv.value?.tank ?? null : null
+  const lastTank = freshAgv ? ipcTracking.value.lastTank : null
+  return { ...current, plc, agv: { station: atTank ?? lastTank, stationConfirmed: atTank !== null, destination: null, moving: false } }
 })
 const usesIpcAgv = computed(() => status.value?.agvSource === 'ipc-gateway')
 const ipcAgvLabel = computed(() => {
@@ -42,6 +52,9 @@ const ipcAgvLabel = computed(() => {
   if (!device) return 'No device feedback'
   if (!device.connected) return 'Disconnected'
   if (!device.fresh) return 'Status stale'
+  if (device.tank != null) return `Tank #${device.tank}`
+  const travel = ipcTracking.value.travel
+  if (travel && !travel.arriving) return `To Tank #${travel.to}`
   return device.station === null ? 'Live feedback' : `Station #${device.station}`
 })
 const tank = computed(() => status.value?.tanks.find(item => item.id === selected.value))
@@ -107,11 +120,13 @@ async function refreshIpcAgv() {
     })
     if (!controller.signal.aborted) {
       ipcAgv.value = response.device
+      ipcTracking.value = updateTracking(ipcTracking.value, response.device, performance.now())
       ipcAgvError.value = false
     }
   } catch {
     if (!controller.signal.aborted) {
       ipcAgv.value = undefined
+      ipcTracking.value = emptyTracking
       ipcAgvError.value = true
     }
   } finally {
@@ -125,6 +140,7 @@ watch(usesIpcAgv, enabled => {
   } else {
     ipcAgvPoll?.abort()
     ipcAgv.value = undefined
+    ipcTracking.value = emptyTracking
     ipcAgvError.value = false
   }
 })
@@ -281,7 +297,10 @@ onUnmounted(() => {
             <dt>AGV</dt>
             <dd v-if="usesIpcAgv">
               <strong><i class="dot" aria-hidden="true"></i>{{ ipcAgvLabel }}</strong>
-              <small>IPC feedback<template v-if="ipcAgv?.motion === 'stopped'"> · Stopped</template><template v-else-if="ipcAgv?.motion === 'moving'"> · Moving</template></small>
+              <small>
+                <template v-if="ipcAgv?.tank != null">Station #{{ ipcAgv.station }}</template><template v-else>IPC feedback</template>
+                <template v-if="ipcAgv?.motion === 'stopped'"> · Stopped</template><template v-else-if="ipcAgv?.motion === 'moving'"> · Moving</template>
+              </small>
             </dd>
             <dd v-else-if="status.agv.station !== null">
               <strong v-if="connected && status.agv.moving"><i class="dot" aria-hidden="true"></i>Moving to #{{ status.agv.destination }}</strong>
@@ -320,6 +339,7 @@ onUnmounted(() => {
 
     <div class="page-body">
       <main v-if="page === 'agv'" class="page agv-page">
+        <AgvTelemetry v-if="usesIpcAgv" :device="ipcAgv" :unavailable="ipcAgvError" />
         <JobGatewayStatusPanel
           :request="requestJobGateway"
           :station-visit="status?.stationVisitTest"
@@ -355,7 +375,8 @@ onUnmounted(() => {
             :command="command"
             @select="id => selected = id"
           />
-          <TrackMap class="area-map" :status="status" :selected="selected" :connected="connected" @select="id => selected = id" />
+          <TrackMap class="area-map" :status="status" :selected="selected" :connected="connected"
+            :live-travel="ipcTracking.travel" @select="id => selected = id" />
           <TankPanel class="area-side" :tank="tank" :status="status" :disabled="controlsDisabled" @command="command" />
         </div>
 
@@ -365,8 +386,10 @@ onUnmounted(() => {
             :status="status"
             :selected="selected"
             :connected="connected"
+            :live-travel="ipcTracking.travel"
+            :show-recipe="false"
             :title="status.simulation ? 'Manual control' : 'Tank monitor'"
-            :hint="status.simulation ? 'Select a tank to access its controls, PLC settings, and AGV move command.' : 'Select a tank to view its PLC readings and equipment status.'"
+            :hint="status.simulation ? 'Select any tank to access its controls, PLC settings, and AGV move command.' : 'Select any tank to view its PLC readings and equipment status.'"
             animate-travel
             @select="id => selected = id"
           >

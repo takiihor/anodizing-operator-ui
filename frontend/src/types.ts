@@ -38,9 +38,14 @@ export interface GatewayAgvFeedback {
   fresh: boolean
   statusAge: number | null
   station: number | null
+  tank: number | null
+  arrived: boolean
+  targetStation: number | null
+  targetTank: number | null
   motion: 'moving' | 'stopped' | 'unknown'
   speed: number | null
   fault: number | null
+  signals: Partial<Record<string, number | boolean | string>>
 }
 
 export interface GatewayAgvStatus {
@@ -120,6 +125,13 @@ export interface Tank {
   timer: number | null
   timerDone: boolean | null
   doorPosition?: 'Open' | 'Closed' | 'Between limits' | 'Conflicting feedback' | 'Unavailable' | null
+  doorSignals?: {
+    tagTank: number
+    opened: boolean | null
+    closed: boolean | null
+    openCommand: boolean | null
+    closeCommand: boolean | null
+  } | null
   alarm: string | null
   details: { label: string; value: string }[]
   fields: Field[]
@@ -151,6 +163,7 @@ export interface LineStatus {
   plc: { quality: Quality; sampleTime: string | null; remote: boolean | null }
   doorPilot?: { tank: number; revision: string | null; nextAction: DoorPilotAction | null; message: string }
   agvSource?: 'ipc-gateway'
+  agvTankStations?: Partial<Record<number, number>>
   agv: { station: number | null; stationConfirmed: boolean; destination: number | null; moving: boolean }
   manualTravel?: { durationMs: number; remainingMs: number } | null
   mockStationVisit?: MockStationVisit

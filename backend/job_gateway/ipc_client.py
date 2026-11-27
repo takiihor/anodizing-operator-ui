@@ -6,8 +6,17 @@ from pathlib import Path
 import ssl
 from urllib.parse import urlsplit
 
+from ..agv_module.driver import STATUS_FIELDS, arrived_station
+
 MAX_REPLY_BYTES = 512 * 1024
 DEVICE_FRESH_SECONDS = 5
+# Station IDs confirmed against the physical line.
+TANK_STATIONS = {1: 2, 2: 3}
+STATION_TANKS = {station: tank for tank, station in TANK_STATIONS.items()}
+STATUS_TEXT = {'header', 'command', 'checksum', 'fault_description'}
+VEHICLE_SIGNALS = {name for name, _ in STATUS_FIELDS.values()} | STATUS_TEXT | {
+    'length', 'laser_blocked', 'roller_center_blocked', 'roller_left_blocked', 'roller_right_blocked',
+}
 
 
 class JobGatewayUnavailable(Exception):
@@ -38,20 +47,40 @@ class JobGatewayReads:
                  and bool(report) and age is not None and age < DEVICE_FRESH_SECONDS)
         report = report if fresh else {}
         station = report.get('current_station')
+        target = report.get('target_station')
+        station = station if type(station) is int and 1 <= station <= 255 else None
+        target = target if type(target) is int and 1 <= target <= 255 else None
         speed = report.get('actual_speed_m_h')
-        speed = speed if type(speed) in (int, float) and 0 <= speed < float('inf') else None
+        speed = speed if type(speed) in (int, float) and -float('inf') < speed < float('inf') else None
         fault = report.get('fault_code')
         stopped = report.get('stopped')
+        confirmed_station = arrived_station(report) if speed == 0 and type(report.get('max_stations')) is int else None
         motion = ('moving' if stopped is False or (speed is not None and speed != 0) else
                   'stopped' if stopped is True and speed == 0 else 'unknown')
+        signals = {}
+        for name, value in report.items():
+            if name not in VEHICLE_SIGNALS:
+                continue
+            if type(value) is bool or (type(value) in (int, float) and -float('inf') < value < float('inf')):
+                signals[name] = value
+            elif name in STATUS_TEXT and isinstance(value, str):
+                signals[name] = value[:256]
+        battery = signals.get('battery_percent')
+        if 'battery_percent' in signals and (type(battery) is not int or not 0 <= battery <= 100):
+            signals.pop('battery_percent')
         return {
             'connected': connected,
             'fresh': fresh,
             'statusAge': age,
-            'station': station if type(station) is int and 1 <= station <= 255 else None,
+            'station': station,
+            'tank': STATION_TANKS.get(confirmed_station),
+            'arrived': confirmed_station is not None,
+            'targetStation': target,
+            'targetTank': STATION_TANKS.get(target) if report.get('mode') == 2 else None,
             'motion': motion,
             'speed': speed,
             'fault': fault if type(fault) is int and fault >= 0 else None,
+            'signals': signals,
         }
 
     def snapshot(self):
@@ -151,6 +180,7 @@ class IPCJobGateway(JobGatewayReads):
 
 class GatewayAgvMonitor:
     setup_url = None
+    tank_stations = TANK_STATIONS
 
     def __init__(self, gateway: IPCJobGateway):
         self.gateway = gateway

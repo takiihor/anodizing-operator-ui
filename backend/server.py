@@ -63,6 +63,7 @@ class Server(ThreadingHTTPServer):
     def line_status(self, status, *, revalidate_plc=False):
         if isinstance(self.agv, GatewayAgvMonitor):
             status['agvSource'] = 'ipc-gateway'
+            status['agvTankStations'] = self.agv.tank_stations
         if self.station_visit_test is not None:
             status['stationVisitTest'] = self.station_visit_test.snapshot()
         if self.mock_station_visit is not None:

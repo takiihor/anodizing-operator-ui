@@ -1,19 +1,23 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { estimatedProgress } from './agvTravel'
+import type { LiveAgvTravel } from './agvTravel'
 import type { LineStatus } from './types'
 
 const props = withDefaults(defineProps<{
   status: LineStatus
   selected: number | null
   connected: boolean
+  showRecipe?: boolean
   /** Tank order to show instead of the selected recipe (used by the recipe editor). */
   sequence?: number[] | null
   /** Clicking a tank adds it to the sequence rather than selecting it. */
   pick?: boolean
   animateTravel?: boolean
+  liveTravel?: LiveAgvTravel | null
   title?: string
   hint?: string
-}>(), { sequence: null, pick: false, title: 'Line map', hint: '' })
+}>(), { showRecipe: true, sequence: null, pick: false, title: 'Line map', hint: '' })
 defineEmits<{ select: [id: number] }>()
 
 // Map coordinates in a 1000 × 460 box. The guide track runs outside both rows,
@@ -78,13 +82,28 @@ function trackDistance(tank: number) {
 const trackLine = ref<SVGPathElement>()
 const travelProgress = ref<number | null>(null)
 const manualTravel = computed(() => props.animateTravel && props.status.simulation ? props.status.manualTravel : null)
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+const liveTravel = computed(() => props.connected && !reducedMotion.matches ? props.liveTravel ?? null : null)
+const estimated = computed(() => liveTravel.value !== null && travelProgress.value !== 1)
 let frame = 0
 let leg: string | undefined
 
-watch([manualTravel, () => props.connected], ([travel, connected]) => {
+watch([manualTravel, liveTravel, () => props.connected], ([travel, liveLeg, connected]) => {
   cancelAnimationFrame(frame)
+  if (liveLeg) {
+    leg = undefined
+    const travelEstimate = liveLeg
+    const limit = travelEstimate.arriving ? 1 : 0.9
+    function update(now: number) {
+      const progress = estimatedProgress(travelEstimate, now)
+      travelProgress.value = progress
+      if (progress < limit) frame = requestAnimationFrame(update)
+    }
+    update(performance.now())
+    return
+  }
   const { station, destination } = props.status.agv
-  if (!travel || station === null || destination === null || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (!travel || station === null || destination === null || reducedMotion.matches) {
     travelProgress.value = null
     leg = undefined
     return
@@ -109,7 +128,8 @@ watch([manualTravel, () => props.connected], ([travel, connected]) => {
 onBeforeUnmount(() => cancelAnimationFrame(frame))
 
 const vehicleStyle = computed(() => {
-  const { station, destination } = props.status.agv
+  const station = liveTravel.value?.from ?? props.status.agv.station
+  const destination = liveTravel.value?.to ?? props.status.agv.destination
   if (station === null) return undefined
   if (travelProgress.value === null || destination === null || !trackLine.value) return markerStyle(station)
   const start = trackDistance(station)
@@ -121,15 +141,15 @@ const vehicleStyle = computed(() => {
 const live = computed(() => props.connected && props.status.plc.quality === 'live')
 
 const stations = computed(() => {
-  const { status, connected } = props
+  const { status, connected, showRecipe, sequence } = props
   const visits = new Map<number, number[]>()
-  const order = props.sequence ?? status.recipe.steps.map(step => step.tank)
+  const order = showRecipe ? (sequence ?? status.recipe.steps.map(step => step.tank)) : []
   order.forEach((tank, index) => {
     const previous = visits.get(tank) ?? []
     previous.push(index + 1)
     visits.set(tank, previous)
   })
-  const activeStep = !props.sequence && connected && status.run.state === 'running' ? status.run.step : null
+  const activeStep = showRecipe && sequence === null && connected && status.run.state === 'running' ? status.run.step : null
   return status.tanks.map(tank => ({
     ...tank,
     hasTemperature: tank.fields.some(field => field.key === 'temperature'),
@@ -140,7 +160,7 @@ const stations = computed(() => {
   }))
 })
 
-const agvConfirmed = computed(() => props.connected && props.status.agv.stationConfirmed)
+const agvConfirmed = computed(() => props.connected && props.status.agv.stationConfirmed && !estimated.value)
 
 function number(tank: number) {
   return String(tank).padStart(2, '0')
@@ -157,7 +177,7 @@ function formatTimer(seconds: number) {
     <div class="panel-heading">
       <div>
         <h2 id="map-title">{{ title }}</h2>
-        <p>{{ hint || `Select a tank to see its status. Numbered chips show visits in ${status.recipe.name}.` }}</p>
+        <p>{{ hint || 'Select a tank to see its status.' }}<template v-if="!hint && showRecipe"> Numbered chips show visits in {{ status.recipe.name }}.</template></p>
       </div>
       <slot name="actions"><span class="chip">16 tanks</span></slot>
     </div>
@@ -173,10 +193,12 @@ function formatTimer(seconds: number) {
 
         <div class="map-legend" aria-hidden="true">
           <span class="legend-title">AGV guide track</span>
-          <span><i class="key key-recipe"></i>In recipe</span>
-          <span><i class="key key-unused"></i>Skipped</span>
-          <span><i class="key key-step">1</i>Visit order</span>
-          <span v-if="status.agv.station !== null"><i class="key key-agv"></i>{{ agvConfirmed ? 'AGV' : 'Last confirmed AGV' }}</span>
+          <template v-if="showRecipe">
+            <span><i class="key key-recipe"></i>In recipe</span>
+            <span><i class="key key-unused"></i>Skipped</span>
+            <span><i class="key key-step">1</i>Visit order</span>
+          </template>
+          <span v-if="status.agv.station !== null"><i class="key key-agv"></i>{{ estimated ? 'Estimated AGV' : agvConfirmed ? 'AGV' : 'Last confirmed AGV' }}</span>
           <span v-if="status.simulation"><i class="key key-destination"></i>Destination</span>
           <span><i class="key key-alarm">!</i>Alarm</span>
         </div>
@@ -193,13 +215,13 @@ function formatTimer(seconds: number) {
             'is-current': tank.current !== null,
             'is-next': tank.next !== null,
             'is-used': tank.steps.length,
-            'is-unused': !tank.steps.length,
+            'is-unused': showRecipe && !tank.steps.length,
           }"
           :style="cardStyle(tank.id)"
           :aria-pressed="pick ? undefined : tank.id === selected"
           :aria-label="[
             pick ? `Add tank #${tank.id} ${tank.name} to the recipe` : `Tank #${tank.id} ${tank.name}`,
-            tank.steps.length ? `Recipe steps ${tank.steps.join(', ')}` : 'Not in the recipe',
+            tank.steps.length ? `Recipe steps ${tank.steps.join(', ')}` : showRecipe ? 'Not in the recipe' : '',
             tank.current !== null ? `${status.run.phase === 'travel' ? 'AGV en route' : 'Processing'} step ${tank.current}` : '',
             tank.next !== null ? `Next step ${tank.next}` : '',
             tank.alarmActive ? `Alarm: ${tank.alarm}` : '',
@@ -236,11 +258,11 @@ function formatTimer(seconds: number) {
         <span
           v-if="status.agv.station !== null"
           class="vehicle"
-          :class="{ 'is-unconfirmed': !agvConfirmed && (!connected || travelProgress === null), 'is-moving': connected && status.agv.moving }"
+          :class="{ 'is-unconfirmed': !agvConfirmed && (!connected || travelProgress === null), 'is-moving': connected && (status.agv.moving || estimated) }"
           :style="vehicleStyle"
-          :title="agvConfirmed ? 'Current AGV station' : travelProgress === null ? 'Last confirmed station' : connected ? 'Simulated AGV in transit' : 'Last displayed simulated position'"
+          :title="estimated ? 'Estimated AGV position between tanks' : agvConfirmed ? 'Current AGV station' : travelProgress === null ? 'Last confirmed station' : connected ? 'Simulated AGV in transit' : 'Last displayed simulated position'"
         >
-          <span aria-hidden="true" class="vehicle-icon"></span>AGV
+          <span aria-hidden="true" class="vehicle-icon"></span>{{ estimated ? 'AGV (est.)' : 'AGV' }}
         </span>
       </div>
     </div>

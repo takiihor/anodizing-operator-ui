@@ -46,8 +46,9 @@ Node.js 22.12+, npm, Bash, `curl`, `flock`, and `ss`.
 | **AGV jog** | Connect, check vehicle feedback, and use Forward, Reverse, Rotate, and Stop with a motion-capable link. |
 
 The **Tank controls** section follows the photographed pushbuttons for each tank.
-The door on physical tank #13 uses the supplier's `Tank12_Door…` tags, as
-confirmed on the line.
+**Door signals** in Manual shows the opened and closed limits and both command
+bits for tanks 1, 3, 5, 7, 10, 13, and 14. The door on physical tank #13 uses the
+supplier's `Tank12_Door…` tags, as confirmed on the line.
 
 ## Test from the console
 
@@ -55,9 +56,9 @@ confirmed on the line.
    and PLC reading. Compare the displayed tank status with the line.
 2. For the supervised Tank 1 pilot, follow the on-site procedure, select
    **Tank 1**, and use the available **Open door** or **Close door** action.
-3. In **AGV status** or **AGV jog**, click **Check IPC communication** and review **IPC to AGV**
-   for vehicle feedback. **Test move to Tank #3 (simulation)** runs an
-   isolated station visit and displays its result on the same page.
+3. In **AGV status** or **AGV jog**, click **Check IPC communication** and review
+   **IPC to AGV** for vehicle feedback. **Test move to Tank #3 (simulation)**
+   runs an isolated station visit from **AGV status** or **Manual → Tank #3**.
 
 ## Try the built-in recipe
 
@@ -110,8 +111,13 @@ certificate, and module key issued for the `read` scope.
 | `ANODIZING_JOB_GATEWAY_KEY_FILE` | Path to the module bearer key file outside the repository |
 
 Use `ANODIZING_AGV_MODE=ipc-gateway` in the deployment profile to show live AGV
-feedback in the header and **AGV status** page. Station numbers are the IDs
-reported by the IPC. This mode reads vehicle status and disables AGV commands.
+feedback in the header and **AGV status** page. IPC stations 2 and 3 map to
+physical tanks 1 and 2 after confirmed arrival. The map animates estimated
+travel between known tank positions and confirms the destination on arrival.
+Other stations retain their IPC labels until their mappings are verified.
+**AGV status** shows battery, speeds, station feedback, motion, sensors, faults,
+and the decoded frame details. **Go to Tank** is visible in Manual. Live moves
+are disabled in IPC status mode.
 The **IPC Job Gateway** card reads `/v1/health`, `/v1/status`, and `/v1/jobs`.
 [IPC field results and API contract](PLC_AGV_COMMUNICATION_TEST.md#ipc-module-gateway-api--192168125118875)
 

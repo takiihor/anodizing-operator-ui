@@ -19,10 +19,10 @@ COMMANDS = {
     'close': 'Tank01_DoorCloseRemote',
 }
 LIMIT = {'open': 'Open', 'close': 'Closed'}
-_, OPEN_ADDRESS, CLOSED_ADDRESS = DOOR_SIGNALS[TANK]
+_, OPEN_ADDRESS, CLOSED_ADDRESS, OPEN_COMMAND, CLOSE_COMMAND = DOOR_SIGNALS[TANK]
 EXPECTED_SIGNALS = {
-    COMMANDS['open']: Signal('M300', 'Bool', 'W'),
-    COMMANDS['close']: Signal('M301', 'Bool', 'W'),
+    COMMANDS['open']: Signal(OPEN_COMMAND, 'Bool', 'W'),
+    COMMANDS['close']: Signal(CLOSE_COMMAND, 'Bool', 'W'),
     'Tank01_DoorOpened': Signal(OPEN_ADDRESS, 'Bool', 'R'),
     'Tank01_DoorClosed': Signal(CLOSED_ADDRESS, 'Bool', 'R'),
     'Remote': Signal('L4', 'Bool', 'R'),

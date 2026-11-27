@@ -92,7 +92,8 @@ class JobGatewayTest(unittest.TestCase):
             self.assertFalse(status['health']['motionEnabled'])
             self.assertEqual(status['status']['owner'], 'operator-ui')
             self.assertEqual(status['agv'], {'connected': False, 'fresh': False, 'statusAge': 1.2,
-                                             'station': None, 'motion': 'unknown', 'speed': None, 'fault': None})
+                                             'station': None, 'tank': None, 'arrived': False, 'targetStation': None,
+                                             'targetTank': None, 'motion': 'unknown', 'speed': None, 'fault': None, 'signals': {}})
             self.assertEqual(status['jobs'], [{'job_id': 'visit-1', 'type': 'station_visit', 'state': 'done'}])
             self.assertNotIn(b'read-test-key', raw)
             self.assertNotIn(b'omit-this-lease', raw)
@@ -107,7 +108,10 @@ class JobGatewayTest(unittest.TestCase):
     def test_agv_monitor_reads_the_ipc_and_rejects_commands(self):
         gateway = self.client()
         device = {'connected': True, 'stale': False, 'status_age_s': 0.7,
-                  'status': {'current_station': 2, 'stopped': True, 'actual_speed_m_h': 0, 'fault_code': 0}}
+                  'status': {'current_station': 2, 'target_station': 3, 'mode': 2, 'max_stations': 10, 'station_arrival': True,
+                             'stopped': True, 'actual_speed_m_h': 0, 'fault_code': 0, 'obstacle_stop': False,
+                             'battery_percent': 88, 'fault_description': 'No fault', 'checksum': 'A5',
+                             'private_metadata': 'omit-this-value'}}
         connection = Mock(spec=HTTPSConnection)
         with patch('backend.job_gateway.ipc_client.HTTPSConnection', return_value=connection), \
                 running_console(gateway, agv=GatewayAgvMonitor(gateway)) as (url, token):
@@ -119,23 +123,47 @@ class JobGatewayTest(unittest.TestCase):
 
             connection.getresponse.side_effect = response
             with urlopen(Request(url + '/api/line/status', headers=headers), timeout=2) as line:
-                self.assertEqual(json.load(line)['agvSource'], 'ipc-gateway')
+                payload = json.load(line)
+                self.assertEqual(payload['agvSource'], 'ipc-gateway')
+                self.assertEqual(payload['agvTankStations'], {'1': 2, '2': 3})
             connection.request.assert_not_called()
 
             status = url + '/api/agv/status'
             with urlopen(Request(status, headers=headers), timeout=2) as current:
-                self.assertEqual(json.load(current), {
-                    'linkMode': 'ipc-gateway',
-                    'device': {'connected': True, 'fresh': True, 'statusAge': 0.7,
-                               'station': 2, 'motion': 'stopped', 'speed': 0, 'fault': 0},
-                })
+                payload = json.load(current)
+                feedback = payload['device']
+                self.assertEqual(payload['linkMode'], 'ipc-gateway')
+                self.assertEqual((feedback['station'], feedback['tank'], feedback['arrived']), (2, 1, True))
+                self.assertEqual((feedback['targetStation'], feedback['targetTank']), (3, 2))
+                self.assertEqual((feedback['motion'], feedback['speed'], feedback['fault']), ('stopped', 0, 0))
+                self.assertEqual(feedback['signals']['battery_percent'], 88)
+                self.assertEqual(feedback['signals']['fault_description'], 'No fault')
+                self.assertNotIn('private_metadata', feedback['signals'])
             connection.request.assert_called_once_with('GET', '/v1/status', headers=gateway.headers)
+
+            device['status'].update(station_arrival=False, stopped=False, actual_speed_m_h=-640)
+            with urlopen(Request(status, headers=headers), timeout=2) as passing:
+                feedback = json.load(passing)['device']
+                self.assertIsNone(feedback['tank'])
+                self.assertEqual((feedback['motion'], feedback['speed'], feedback['targetTank']), ('moving', -640, 2))
+
+            device['status'].update(current_station=3, station_arrival=True, stopped=True, actual_speed_m_h=0)
+            with urlopen(Request(status, headers=headers), timeout=2) as tank2:
+                feedback = json.load(tank2)['device']
+                self.assertEqual((feedback['tank'], feedback['arrived']), (2, True))
+
+            device['status'].update(current_station=1, station_arrival=True)
+            with urlopen(Request(status, headers=headers), timeout=2) as unmapped:
+                feedback = json.load(unmapped)['device']
+                self.assertEqual(feedback['station'], 1)
+                self.assertIsNone(feedback['tank'])
 
             device['status_age_s'] = 6
             with urlopen(Request(status, headers=headers), timeout=2) as stale:
                 self.assertEqual(json.load(stale)['device'], {
                     'connected': True, 'fresh': False, 'statusAge': 6,
-                    'station': None, 'motion': 'unknown', 'speed': None, 'fault': None,
+                    'station': None, 'tank': None, 'arrived': False, 'targetStation': None, 'targetTank': None,
+                    'motion': 'unknown', 'speed': None, 'fault': None, 'signals': {},
                 })
 
             command = Request(url + '/api/agv/command', b'{"action":"forward"}', headers)
@@ -144,7 +172,7 @@ class JobGatewayTest(unittest.TestCase):
             with refused.exception as error:
                 self.assertEqual(error.code, 400)
                 self.assertIn('read-only', json.load(error)['error'])
-            self.assertEqual(connection.request.call_count, 2)
+            self.assertEqual(connection.request.call_count, 5)
 
     def test_tls_failure_is_reported_without_connection_fallback(self):
         gateway = self.client()

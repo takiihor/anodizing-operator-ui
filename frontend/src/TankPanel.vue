@@ -14,6 +14,10 @@ const draft = ref<Record<string, string | number>>({})
 const checkingPlc = ref(false)
 const plcCheckPassed = ref(false)
 const plcCheckMessage = ref('')
+const DOOR_SIGNAL_LABELS = {
+  opened: 'Door opened limit', closed: 'Door closed limit',
+  openCommand: 'Open door command', closeCommand: 'Close door command',
+}
 
 const fields = computed(() => props.tank.fields)
 const visits = computed(() => props.status.recipe.steps.flatMap((step, index) =>
@@ -28,8 +32,14 @@ const alarmActive = computed(() => Boolean(props.tank.alarm) && live.value)
 const hasTemperature = computed(() => fields.value.some(field => field.key === 'temperature'))
 const agvAtTank = computed(() => props.status.agv.stationConfirmed && props.status.agv.station === props.tank.id)
 const agvHeading = computed(() => props.status.agv.destination === props.tank.id)
+const ipcAgv = computed(() => props.status.agvSource === 'ipc-gateway')
+const ipcStation = computed(() => props.status.agvTankStations?.[props.tank.id])
 const mockVisit = computed(() => props.status.mockStationVisit)
-const mockJob = computed(() => mockVisit.value?.job?.tank === props.tank.id ? mockVisit.value.job : null)
+const visitTest = computed(() => props.status.stationVisitTest)
+const mockJob = computed(() => {
+  const job = (mockVisit.value ?? visitTest.value)?.job
+  return job?.tank === props.tank.id ? job : null
+})
 const mockJobLabel = computed(() => {
   const state = mockJob.value?.state
   if (!state) return 'Ready for a mock station visit'
@@ -141,7 +151,7 @@ function submit() {
         <span v-if="agvAtTank" class="chip chip-dark">AGV here</span>
         <span v-else-if="agvHeading" class="chip chip-info">AGV on the way</span>
         <span v-if="visits.length" class="chip chip-info">{{ visits.length === 1 ? 'Step' : 'Steps' }} {{ visits.map(visit => visit.number).join(', ') }}</span>
-        <span v-else class="chip">Not in recipe</span>
+        <span v-else-if="!showControls" class="chip">Not in recipe</span>
       </div>
     </div>
 
@@ -212,6 +222,44 @@ function submit() {
         <button v-if="doorPilot.nextAction === 'clear'" type="button" class="button primary" :disabled="disabled || !live" @click="sendDoor('clear')">Clear PLC command</button>
         <button v-if="doorPilot.nextAction === 'resolve'" type="button" class="button secondary" :disabled="disabled || !live" @click="sendDoor('resolve')">Acknowledge after inspection</button>
       </section>
+
+      <section v-if="showControls && tank.doorSignals" class="tank-controls" aria-labelledby="door-signals-title">
+        <div class="settings-heading">
+          <h3 id="door-signals-title">Door signals</h3>
+          <span v-if="tank.doorSignals.tagTank !== tank.id" class="plc-mode">PLC Tank {{ tank.doorSignals.tagTank }} tags</span>
+        </div>
+        <dl class="door-signal-grid" :class="{ 'is-stale': !live }">
+          <div v-for="(label, signal) in DOOR_SIGNAL_LABELS" :key="signal">
+            <dt>{{ label }}</dt>
+            <dd>{{ tank.doorSignals[signal] === null ? 'Unavailable' : tank.doorSignals[signal] ? 'On' : 'Off' }}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section v-if="showControls && ipcAgv" class="tank-controls" aria-labelledby="go-to-tank-title">
+        <div class="settings-heading">
+          <h3 id="go-to-tank-title">Go to Tank</h3>
+          <span v-if="ipcStation !== undefined" class="plc-mode">IPC Station #{{ ipcStation }}</span>
+        </div>
+        <button type="button" class="button secondary full" disabled>Go to Tank #{{ tank.id }}</button>
+        <p class="hint">{{ ipcStation === undefined ? 'Station mapping pending. ' : '' }}Live station visits are disabled in IPC status mode.</p>
+        <template v-if="visitTest?.tanks.includes(tank.id)">
+          <button type="button" class="button secondary full"
+            :disabled="disabled || visitTest.busy || mockJob?.state === 'unknown'"
+            @click="$emit('command', { action: 'test-station-visit' })"
+          >Test move to Tank #{{ tank.id }} (simulation)</button>
+          <p v-if="mockJob" class="hint" role="status">
+            {{ mockJobLabel }}<template v-if="mockJob.message"> · {{ mockJob.message }}</template>
+          </p>
+        </template>
+      </section>
+      <button
+        v-else-if="manual && !mockVisit"
+        type="button"
+        class="button secondary full large"
+        :disabled="disabled || agvAtTank"
+        @click="$emit('command', { action: 'move', tank: tank.id })"
+      >{{ agvAtTank ? 'AGV is at this tank' : `Move AGV to tank #${tank.id}` }}</button>
 
       <details v-if="tank.details.length" class="disclosure">
         <summary>More status</summary>
@@ -310,14 +358,7 @@ function submit() {
         </button>
       </form>
 
-      <button
-        v-if="manual && !mockVisit"
-        type="button"
-        class="button secondary full large"
-        :disabled="disabled || agvAtTank"
-        @click="$emit('command', { action: 'move', tank: tank.id })"
-      >{{ agvAtTank ? 'AGV is at this tank' : `Move AGV to tank #${tank.id}` }}</button>
-      <p v-else-if="!manual && status.simulation" class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
+      <p v-if="!manual && status.simulation" class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
     </div>
   </section>
 </template>
@@ -325,4 +366,8 @@ function submit() {
 <style scoped>
 .mock-job-id { overflow-wrap: anywhere; text-align: right; }
 [aria-labelledby="mock-visit-title"] dt { flex: none; }
+.door-signal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.door-signal-grid dt { font-size: .78rem; color: var(--muted); }
+.door-signal-grid dd { margin: 2px 0 0; font-weight: 650; }
+.door-signal-grid.is-stale dd { color: var(--muted); }
 </style>

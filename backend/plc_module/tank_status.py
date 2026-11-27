@@ -1,14 +1,15 @@
 """Map supplier tags to the operator's physical tank numbers."""
 
+# Supplier tank, opened limit, closed limit, open command, close command.
 # The production test confirmed that the Tank12 API tags operate physical tank 13.
 DOOR_SIGNALS = {
-    1: (1, 'D1000.4', 'D1000.5'),
-    3: (3, 'D1010.4', 'D1010.5'),
-    5: (5, 'D1020.4', 'D1020.5'),
-    7: (7, 'D1028.4', 'D1028.5'),
-    10: (10, 'D1102.4', 'D1102.5'),
-    13: (12, 'D1116.4', 'D1116.5'),
-    14: (14, 'D1126.4', 'D1126.5'),
+    1: (1, 'D1000.4', 'D1000.5', 'M300', 'M301'),
+    3: (3, 'D1010.4', 'D1010.5', 'M302', 'M303'),
+    5: (5, 'D1020.4', 'D1020.5', 'M304', 'M305'),
+    7: (7, 'D1028.4', 'D1028.5', 'M306', 'M307'),
+    10: (10, 'D1102.4', 'D1102.5', 'M308', 'M309'),
+    13: (12, 'D1116.4', 'D1116.5', 'M310', 'M311'),
+    14: (14, 'D1126.4', 'D1126.5', 'M312', 'M313'),
 }
 EQUIPMENT_STATUS = {
     'filter': 'FilterStatus', 'heater': 'HeaterStatus', 'ultrasonic': 'USStatus',
@@ -37,14 +38,25 @@ TANK_ALARMS = {
 }
 
 
-def door_position(sample, tank):
-    signals = DOOR_SIGNALS.get(tank)
-    if signals is None:
+def door_feedback(sample, tank):
+    addresses = DOOR_SIGNALS.get(tank)
+    if addresses is None:
         return None
-    tag_tank, open_address, closed_address = signals
+    tag_tank, opened, closed, open_command, close_command = addresses
     tag = f'Tank{tag_tank:02}_Door'
-    opened = sample.value(f'{tag}Opened', kind='Bool', address=open_address)
-    closed = sample.value(f'{tag}Closed', kind='Bool', address=closed_address)
+    return {
+        'tagTank': tag_tank,
+        'opened': sample.value(f'{tag}Opened', kind='Bool', address=opened),
+        'closed': sample.value(f'{tag}Closed', kind='Bool', address=closed),
+        'openCommand': sample.value(f'{tag}OpenRemote', kind='Bool', permission='W', address=open_command),
+        'closeCommand': sample.value(f'{tag}CloseRemote', kind='Bool', permission='W', address=close_command),
+    }
+
+
+def position_from_feedback(feedback):
+    if feedback is None:
+        return None
+    opened, closed = feedback['opened'], feedback['closed']
     if opened is None or closed is None:
         return 'Unavailable'
     return {
@@ -55,11 +67,15 @@ def door_position(sample, tank):
     }[opened, closed]
 
 
+def door_position(sample, tank):
+    return position_from_feedback(door_feedback(sample, tank))
+
+
 def tank_status(tank, sample):
     tank_id = tank['id']
     prefix = f'Tank{tank_id:02}_'
     basket = sample.value(prefix + 'HaveBasket', kind='Bool')
-    position = door_position(sample, tank_id)
+    door = door_feedback(sample, tank_id)
     details = [{'label': 'Basket', 'value': {True: 'Present', False: 'Empty', None: 'Unavailable'}[basket]}]
     numeric_details = {
         7: (('Measured current', 'AmperePV', 'A'), ('Measured voltage', 'VoltagePV', 'V')),
@@ -76,7 +92,8 @@ def tank_status(tank, sample):
         'temperature': sample.value(prefix + 'TempPV', kind='number'),
         'timer': sample.value(prefix + 'TimePV', kind='number'),
         'timerDone': sample.value(prefix + 'TimeUp', kind='Bool'),
-        'doorPosition': position,
+        'doorPosition': position_from_feedback(door),
+        'doorSignals': door,
         'details': details,
         'alarm': f"Tank #{tank_id} {', '.join(alarms)}" if alarms else None,
         'fields': [

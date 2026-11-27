@@ -66,6 +66,8 @@ class PLCModuleTest(unittest.TestCase):
         self.signal('Tank01_DoorClosed', 1, address='D1000.5')
         self.signal('Tank12_DoorOpened', 1, address='D1116.4')
         self.signal('Tank12_DoorClosed', 0, address='D1116.5')
+        self.signal('Tank12_DoorOpenRemote', 1, address='M310', permission='W')
+        self.signal('Tank12_DoorCloseRemote', 0, address='M311', permission='W')
 
     def signal(self, name, value, *, kind='Bool', permission='R', address=None):
         self.metadata.append({'tag_name': name, 'data_type': kind, 'read_write': permission,
@@ -165,9 +167,14 @@ class PLCModuleTest(unittest.TestCase):
             self.assertEqual(tank1['fields'][0]['value'], 120)
             self.assertTrue(tank1['controls'][0]['active'])
             self.assertEqual(tank1['alarm'], 'Tank #1 low water level')
+            self.assertEqual(tank1['doorSignals'], {'tagTank': 1, 'opened': False, 'closed': True,
+                                                    'openCommand': False, 'closeCommand': False})
             self.assertIsNone(status['agv']['station'])
             self.assertIsNone(status['tanks'][11]['doorPosition'])
+            self.assertIsNone(status['tanks'][11]['doorSignals'])
             self.assertEqual(status['tanks'][12]['doorPosition'], 'Open')
+            self.assertEqual(status['tanks'][12]['doorSignals'], {'tagTank': 12, 'opened': True, 'closed': False,
+                                                                  'openCommand': True, 'closeCommand': False})
 
             for command in ('mode', 'settings', 'move', 'tank-control', 'start', 'stop', 'simulation', 'reset', 'plc-door'):
                 with self.subTest(command=command), self.assertRaises(HTTPError) as failure:
