@@ -79,12 +79,47 @@ defaults to 8870 and can be set with `ANODIZING_AGV_CONTROLLER_PORT`.
 The earlier commissioning API remains selectable with `ANODIZING_AGV_MODE=legacy`.
 Recipe execution and the tank map still use simulated station moves.
 
+## Connect the IPC Job Gateway
+
+The operator-side integration is in [`backend/job_gateway/`](backend/job_gateway/).
+Set the following in the operator backend's environment using the IPC origin,
+certificate, and module key issued for the `read` scope.
+
+| Variable | Value |
+| --- | --- |
+| `ANODIZING_JOB_GATEWAY_URL` | IPC HTTPS origin, such as `https://192.168.1.251:18875` |
+| `ANODIZING_JOB_GATEWAY_CERT_FILE` | Path to the issued IPC certificate |
+| `ANODIZING_JOB_GATEWAY_KEY_FILE` | Path to the module bearer key file outside the repository |
+
+Start the operator console and open **AGV jog → IPC Job Gateway**. The card uses
+the console's `GET /api/job-gateway/status` endpoint, which reads IPC
+`/v1/health`, `/v1/status`, and `/v1/jobs`. This stage is read-only.
+[IPC field results and API contract](PLC_AGV_COMMUNICATION_TEST.md#ipc-module-gateway-api--192168125118875)
+
+### Test a station visit with the mock Gateway
+
+Start a separate console with the built-in loopback mock. It uses simulated
+PLC and AGV links and a test-only mapping from Tank #3 to AGV station 3.
+
+```sh
+ANODIZING_PLC_MODE=simulation ANODIZING_AGV_MODE=simulator \
+  ANODIZING_JOB_GATEWAY_MODE=mock ./start.sh 8874
+```
+
+Open [Manual on port 8874](http://127.0.0.1:8874/manual), select **Tank #3**,
+and press **Move AGV to tank #3**. The backend claims mock control, keeps its
+lease alive, and submits one `station_visit` after the mock reports armed.
+Follow the job ID and status in the tank panel. **Arrived and stopped** appears
+when the mock confirms the target station and stopped feedback. Restart the
+mock console to repeat a completed demonstration.
+
 ## Monitor the PLC
 
 The production PLC module is in [`backend/plc_module/`](backend/plc_module/).
-Set `PLC_API_BASE_URL` to the supplier API origin and `PLC_API_KEY` in the
-operator backend's environment. Start a separate monitor instance if the
-simulator is already running.
+Set `PLC_API_BASE_URL` to the supplier API origin. Set `PLC_API_KEY_FILE` to
+the path of a private key file outside the repository, or use `PLC_API_KEY` if
+your deployment already supplies the key through the environment. Start a
+separate monitor instance if the simulator is already running.
 
 ```sh
 ANODIZING_PLC_MODE=monitor ./start.sh 8872

@@ -29,12 +29,12 @@ The operator uses one screen to see the AGV and tank status, run a recipe in **A
 Use the orientation in Appendix 2, with ultrasonic cleaning at the lower right and the bend on the left. The sketch shows the station order and the guide track. Use the drawing to position and size the tank cards. [Anodizing line layout, Appendix 2](../../Downloads/ICDRC_Application_Anodizing.pdf)
 
 ```text
-  ╭───────────────────────────────╴
-  │       [12] [13] [14] [15] [16]
-  │  [11]
-  │  [10]
-  │  [09] [08] [07] [06] [05] [04] [03] [02] [01]
-  ╰──────────────────────────────────────────────╴
+  ╭─────────────────────────────────────────────╴
+  │       [10] [11] [12] [13] [14] [15] [16]
+  │  [09]
+  │  [08]
+  │       [07] [06] [05] [04] [03] [02] [01]
+  ╰─────────────────────────────────────────────╴
 ```
 
 Show physical tank numbers and recipe visit numbers on the map. The selected recipe can skip stations, revisit a tank, or call for a return along the track. Highlight all included tanks and label the current step and the next visit. If the AGV controller reports only station arrivals, show the last confirmed station and the destination while the AGV is moving.

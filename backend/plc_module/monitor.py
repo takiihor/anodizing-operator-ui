@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+from pathlib import Path
 from threading import Lock
 from time import monotonic
 from zoneinfo import ZoneInfo
@@ -76,7 +77,16 @@ def read_catalog(data):
 class PLCMonitor:
     @classmethod
     def from_environment(cls, env):
-        client = PLCClient(env.get('PLC_API_BASE_URL', ''), env.get('PLC_API_KEY', ''))
+        api_key = env.get('PLC_API_KEY', '')
+        key_file = env.get('PLC_API_KEY_FILE')
+        if key_file:
+            if api_key:
+                raise ValueError('Set either PLC_API_KEY_FILE or PLC_API_KEY.')
+            try:
+                api_key = Path(key_file).read_text(encoding='utf-8').strip()
+            except (OSError, UnicodeError):
+                raise ValueError('Could not read the PLC API key file.') from None
+        client = PLCClient(env.get('PLC_API_BASE_URL', ''), api_key)
         timezone_name = env.get('PLC_TIMESTAMP_TIMEZONE')
         max_age = timedelta(milliseconds=int(env.get('PLC_STALE_AFTER_MS', '3000')))
         if max_age <= timedelta():

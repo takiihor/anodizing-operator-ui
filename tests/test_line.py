@@ -66,10 +66,17 @@ class OperatorLineTest(unittest.TestCase):
         self.command('mode', mode='manual')
         status = self.command('move', tank=12)
         self.assertEqual(status['agv'], {'station': 1, 'stationConfirmed': False, 'destination': 12, 'moving': True})
+        self.assertEqual(status['manualTravel'], {'durationMs': 4400, 'remainingMs': 4400})
+        self.now = 2.2
+        moving = self.line.snapshot()
+        self.assertEqual(moving['manualTravel'], {'durationMs': 4400, 'remainingMs': 2200})
+        self.assertFalse(moving['agv']['stationConfirmed'])
         with self.assertRaisesRegex(ValueError, 'current run or AGV'):
             self.command('mode', mode='automatic')
         self.now = 10
-        self.assertEqual(self.line.snapshot()['agv'], {'station': 12, 'stationConfirmed': True, 'destination': None, 'moving': False})
+        arrived = self.line.snapshot()
+        self.assertEqual(arrived['agv'], {'station': 12, 'stationConfirmed': True, 'destination': None, 'moving': False})
+        self.assertIsNone(arrived['manualTravel'])
 
     def test_manual_controls_match_photographed_tank_panels(self):
         expected = [

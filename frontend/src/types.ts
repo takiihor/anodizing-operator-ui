@@ -33,6 +33,26 @@ export interface AgvStatus {
   results: Partial<Record<AgvAction, { id: number; state: string; acknowledged: boolean; confirmedStopped: boolean }>>
 }
 
+export type JobGatewayStatus = { configured: false } | {
+  configured: true
+  health: { build: string; protocol: number; enabled: boolean; simulated: boolean; motionEnabled: boolean }
+  status: { owner: string | null; armed: boolean; activeJobId: string | null; recoveryRequired: boolean }
+  jobs: { job_id?: string; type?: string; state?: string }[]
+}
+
+export interface MockStationVisit {
+  tanks: number[]
+  busy: boolean
+  job: {
+    jobId: string
+    tank: number
+    station: number
+    state: 'claiming' | 'waiting_for_arm' | 'submitting' | 'checking' | 'accepted' | 'running'
+      | 'done' | 'stopped' | 'refused' | 'failed' | 'unknown'
+    message: string | null
+  } | null
+}
+
 export interface Field {
   key: string
   label: string
@@ -115,6 +135,8 @@ export interface LineStatus {
   plc: { quality: Quality; sampleTime: string | null; remote: boolean | null }
   doorPilot?: { tank: number; revision: string | null; nextAction: DoorPilotAction | null; message: string }
   agv: { station: number | null; stationConfirmed: boolean; destination: number | null; moving: boolean }
+  manualTravel?: { durationMs: number; remainingMs: number } | null
+  mockStationVisit?: MockStationVisit
   scenario: { lowWater: boolean; timeScale: number } | null
   run: {
     state: 'idle' | 'running' | 'stopped' | 'complete'

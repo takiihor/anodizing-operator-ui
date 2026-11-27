@@ -142,10 +142,13 @@ class OperatorLine:
             else:
                 return
 
+    def travel_duration(self, tank):
+        return max(1, abs(self.station - tank) * 0.4)
+
     def move(self, tank, now):
         self.destination = tank
         self.station_confirmed = False
-        self.travel_end = now + max(1, abs(self.station - tank) * 0.4)
+        self.travel_end = now + self.travel_duration(tank)
 
     def begin_dwell(self, now):
         self.completed_tanks.discard(self.station)
@@ -430,6 +433,12 @@ class OperatorLine:
             next_tank = steps[0]['tank']
         elif self.run == 'running' and self.step + 1 < len(steps):
             next_tank = steps[self.step + 1]['tank']
+        manual_travel = None
+        if self.mode == 'manual' and self.travel_end is not None:
+            manual_travel = {
+                'durationMs': self.travel_duration(self.destination) * 1000,
+                'remainingMs': (self.travel_end - now) * 1000,
+            }
         return {
             'mode': self.mode, 'simulation': True,
             'plc': {'quality': self.quality, 'sampleTime': self.sample_time, 'remote': self.quality == 'live'},
@@ -439,6 +448,7 @@ class OperatorLine:
                 'destination': self.destination,
                 'moving': self.travel_end is not None,
             },
+            'manualTravel': manual_travel,
             'scenario': {'lowWater': self.low_water, 'timeScale': TIME_SCALE},
             'run': {
                 'state': self.run, 'step': self.step, 'nextTank': next_tank,

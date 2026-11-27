@@ -19,6 +19,17 @@ const alarmActive = computed(() => Boolean(props.tank.alarm) && live.value)
 const hasTemperature = computed(() => fields.value.some(field => field.key === 'temperature'))
 const agvAtTank = computed(() => props.status.agv.stationConfirmed && props.status.agv.station === props.tank.id)
 const agvHeading = computed(() => props.status.agv.destination === props.tank.id)
+const mockVisit = computed(() => props.status.mockStationVisit)
+const mockJob = computed(() => mockVisit.value?.job?.tank === props.tank.id ? mockVisit.value.job : null)
+const mockJobLabel = computed(() => {
+  const state = mockJob.value?.state
+  if (!state) return 'Ready for a mock station visit'
+  return {
+    claiming: 'Requesting mock control', waiting_for_arm: 'Waiting for mock arm', submitting: 'Submitting station visit',
+    checking: 'Checking job status', accepted: 'Accepted', running: 'Moving', done: 'Arrived and stopped',
+    stopped: 'Stopped', refused: 'Refused', failed: 'Failed', unknown: 'Outcome unconfirmed',
+  }[state]
+})
 const doorPilot = computed(() => props.showControls && props.status.doorPilot?.tank === props.tank.id
   ? props.status.doorPilot : undefined)
 const canEdit = computed(() => manual.value && !props.disabled && live.value && props.status.plc.remote)
@@ -124,6 +135,25 @@ function submit() {
           <strong class="door-position" :class="{ 'is-stale': !live }">{{ tank.doorPosition }}</strong>
         </div>
       </div>
+
+      <section v-if="manual && mockVisit?.tanks.includes(tank.id)" class="tank-controls" aria-labelledby="mock-visit-title">
+        <div class="settings-heading">
+          <h3 id="mock-visit-title">Station visit</h3>
+          <span class="plc-mode">Mock IPC</span>
+        </div>
+        <p class="hint" role="status">
+          <strong>{{ mockJobLabel }}</strong><template v-if="mockJob?.message"> · {{ mockJob.message }}</template>
+        </p>
+        <dl v-if="mockJob" class="status-list">
+          <div><dt>AGV station</dt><dd>{{ mockJob.station }}</dd></div>
+          <div><dt>Job ID</dt><dd class="mock-job-id">{{ mockJob.jobId }}</dd></div>
+        </dl>
+        <button type="button" class="button secondary full large"
+          :disabled="disabled || agvAtTank || mockVisit.busy || mockJob?.state === 'unknown'"
+          @click="$emit('command', { action: 'move', tank: tank.id })"
+        >{{ agvAtTank ? 'AGV is at this tank' : `Move AGV to tank #${tank.id}` }}</button>
+      </section>
+      <p v-else-if="manual && mockVisit" class="hint">Select Tank #3 to run the mock station visit.</p>
 
       <section v-if="doorPilot" class="tank-controls" aria-labelledby="door-pilot-title">
         <div class="settings-heading">
@@ -237,13 +267,18 @@ function submit() {
       </form>
 
       <button
-        v-if="manual"
+        v-if="manual && !mockVisit"
         type="button"
         class="button secondary full large"
         :disabled="disabled || agvAtTank"
         @click="$emit('command', { action: 'move', tank: tank.id })"
       >{{ agvAtTank ? 'AGV is at this tank' : `Move AGV to tank #${tank.id}` }}</button>
-      <p v-else-if="status.simulation" class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
+      <p v-else-if="!manual && status.simulation" class="hint">Open the <a href="/manual" data-nav="manual">Manual</a> page to change settings or move the AGV.</p>
     </div>
   </section>
 </template>
+
+<style scoped>
+.mock-job-id { overflow-wrap: anywhere; text-align: right; }
+[aria-labelledby="mock-visit-title"] dt { flex: none; }
+</style>

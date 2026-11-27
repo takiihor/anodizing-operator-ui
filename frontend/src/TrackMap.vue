@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LineStatus } from './types'
 
 const props = withDefaults(defineProps<{
@@ -10,6 +10,7 @@ const props = withDefaults(defineProps<{
   sequence?: number[] | null
   /** Clicking a tank adds it to the sequence rather than selecting it. */
   pick?: boolean
+  animateTravel?: boolean
   title?: string
   hint?: string
 }>(), { sequence: null, pick: false, title: 'Line map', hint: '' })
@@ -24,18 +25,26 @@ const CARD_H = 92
 const TRACK_TOP = 38
 const TRACK_BOTTOM = 422
 const TRACK_LEFT = 60
-const TRACK_PATH = `M 800 ${TRACK_TOP} H 98 A 38 38 0 0 0 ${TRACK_LEFT} 76 V 384 A 38 38 0 0 0 98 ${TRACK_BOTTOM} H 990`
+const TRACK_RIGHT = 990
+const TURN_RADIUS = 38
+const ROW_LEFT = 265
+const ROW_RIGHT = 935
+const TANK_SPACING = (ROW_RIGHT - ROW_LEFT) / 6
+const TURN_X = TRACK_LEFT + TURN_RADIUS
+const UPPER_TURN_Y = TRACK_TOP + TURN_RADIUS
+const LOWER_TURN_Y = TRACK_BOTTOM - TURN_RADIUS
+const TRACK_PATH = `M ${TRACK_RIGHT} ${TRACK_TOP} H ${TURN_X} A ${TURN_RADIUS} ${TURN_RADIUS} 0 0 0 ${TRACK_LEFT} ${UPPER_TURN_Y} V ${LOWER_TURN_Y} A ${TURN_RADIUS} ${TURN_RADIUS} 0 0 0 ${TURN_X} ${TRACK_BOTTOM} H ${TRACK_RIGHT}`
 
 function centre(tank: number) {
-  if (tank <= 9) return { x: 935 - (tank - 1) * 97, y: 335 }
-  if (tank <= 11) return { x: 159, y: tank === 10 ? 230 : 125 }
-  return { x: 285 + (tank - 12) * 108, y: 125 }
+  if (tank <= 7) return { x: ROW_RIGHT - (tank - 1) * TANK_SPACING, y: 335 }
+  if (tank <= 9) return { x: 151, y: tank === 8 ? 285 : 175 }
+  return { x: ROW_LEFT + (tank - 10) * TANK_SPACING, y: 125 }
 }
 
 function trackPoint(tank: number) {
   const { x, y } = centre(tank)
-  if (tank <= 9) return { x, y: TRACK_BOTTOM }
-  if (tank <= 11) return { x: TRACK_LEFT, y }
+  if (tank <= 7) return { x, y: TRACK_BOTTOM }
+  if (tank <= 9) return { x: TRACK_LEFT, y }
   return { x, y: TRACK_TOP }
 }
 
@@ -56,6 +65,58 @@ function markerStyle(tank: number) {
   const { x, y } = trackPoint(tank)
   return pct(x, y)
 }
+
+function trackDistance(tank: number) {
+  const { x, y } = trackPoint(tank)
+  if (tank >= 10) return TRACK_RIGHT - x
+  const upperStraight = TRACK_RIGHT - TURN_X
+  const turnLength = Math.PI * TURN_RADIUS / 2
+  if (tank >= 8) return upperStraight + turnLength + y - UPPER_TURN_Y
+  return upperStraight + 2 * turnLength + LOWER_TURN_Y - UPPER_TURN_Y + x - TURN_X
+}
+
+const trackLine = ref<SVGPathElement>()
+const travelProgress = ref<number | null>(null)
+const manualTravel = computed(() => props.animateTravel && props.status.simulation ? props.status.manualTravel : null)
+let frame = 0
+let leg: string | undefined
+
+watch([manualTravel, () => props.connected], ([travel, connected]) => {
+  cancelAnimationFrame(frame)
+  const { station, destination } = props.status.agv
+  if (!travel || station === null || destination === null || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    travelProgress.value = null
+    leg = undefined
+    return
+  }
+  const nextLeg = `${station}:${destination}`
+  if (leg !== nextLeg) travelProgress.value = null
+  leg = nextLeg
+  if (!connected) return
+
+  const { durationMs, remainingMs } = travel
+  const startProgress = Math.max(travelProgress.value ?? 0, 1 - remainingMs / durationMs)
+  const startTime = performance.now()
+  travelProgress.value = startProgress
+  function update(now: number) {
+    const progress = Math.min(1, startProgress + (now - startTime) / durationMs)
+    travelProgress.value = progress
+    if (progress < 1) frame = requestAnimationFrame(update)
+  }
+  frame = requestAnimationFrame(update)
+}, { immediate: true })
+
+onBeforeUnmount(() => cancelAnimationFrame(frame))
+
+const vehicleStyle = computed(() => {
+  const { station, destination } = props.status.agv
+  if (station === null) return undefined
+  if (travelProgress.value === null || destination === null || !trackLine.value) return markerStyle(station)
+  const start = trackDistance(station)
+  const end = trackDistance(destination)
+  const point = trackLine.value.getPointAtLength(start + (end - start) * travelProgress.value)
+  return pct(point.x, point.y)
+})
 
 const live = computed(() => props.connected && props.status.plc.quality === 'live')
 
@@ -104,7 +165,7 @@ function formatTimer(seconds: number) {
       <div class="diagram" :class="{ 'is-pick': pick }">
         <svg class="track" :viewBox="`0 0 ${WIDTH} ${HEIGHT}`" aria-hidden="true" focusable="false">
           <path class="track-bed" :d="TRACK_PATH" />
-          <path class="track-line" :d="TRACK_PATH" />
+          <path ref="trackLine" class="track-line" :d="TRACK_PATH" />
           <g class="track-stops">
             <circle v-for="tank in stations" :key="tank.id" :cx="trackPoint(tank.id).x" :cy="trackPoint(tank.id).y" r="4" />
           </g>
@@ -175,9 +236,9 @@ function formatTimer(seconds: number) {
         <span
           v-if="status.agv.station !== null"
           class="vehicle"
-          :class="{ 'is-unconfirmed': !agvConfirmed, 'is-moving': connected && status.agv.moving }"
-          :style="markerStyle(status.agv.station)"
-          :title="agvConfirmed ? 'Current AGV station' : 'Last confirmed station'"
+          :class="{ 'is-unconfirmed': !agvConfirmed && (!connected || travelProgress === null), 'is-moving': connected && status.agv.moving }"
+          :style="vehicleStyle"
+          :title="agvConfirmed ? 'Current AGV station' : travelProgress === null ? 'Last confirmed station' : connected ? 'Simulated AGV in transit' : 'Last displayed simulated position'"
         >
           <span aria-hidden="true" class="vehicle-icon"></span>AGV
         </span>

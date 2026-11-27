@@ -13,6 +13,22 @@ from backend.plc_module import DoorPilot, PLCClient, PLCMonitor
 from backend.server import Server
 
 
+class PLCConfigurationTest(unittest.TestCase):
+    def test_loads_the_supplier_key_from_a_private_file(self):
+        env = {'PLC_API_BASE_URL': 'http://127.0.0.1:8000'}
+        with TemporaryDirectory() as directory:
+            key_file = Path(directory) / 'plc-api.key'
+            key_file.write_text('test-supplier-key\n', encoding='utf-8')
+            monitor = PLCMonitor.from_environment({**env, 'PLC_API_KEY_FILE': str(key_file)})
+            self.assertEqual(monitor.client.headers['X-API-Key'], 'test-supplier-key')
+
+            with self.assertRaisesRegex(ValueError, 'Set either PLC_API_KEY_FILE or PLC_API_KEY'):
+                PLCMonitor.from_environment({**env, 'PLC_API_KEY_FILE': str(key_file), 'PLC_API_KEY': 'other'})
+
+        monitor = PLCMonitor.from_environment({**env, 'PLC_API_KEY': 'existing-env-key'})
+        self.assertEqual(monitor.client.headers['X-API-Key'], 'existing-env-key')
+
+
 @contextmanager
 def serving(server):
     with server:

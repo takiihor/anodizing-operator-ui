@@ -7,7 +7,7 @@ import SettingsPage from './SettingsPage.vue'
 import TankPanel from './TankPanel.vue'
 import TrackMap from './TrackMap.vue'
 import { navigate, page, TITLES } from './router'
-import type { AgvStatus, Command, LineStatus, Mode, Page, RecipeLibrary } from './types'
+import type { AgvStatus, Command, JobGatewayStatus, LineStatus, Mode, Page, RecipeLibrary } from './types'
 
 let token = document.querySelector<HTMLMetaElement>('meta[name="module-token"]')?.content ?? ''
 const snapshot = ref<LineStatus>()
@@ -30,7 +30,8 @@ const status = computed<LineStatus | undefined>(() => {
   return { ...current, plc: { ...current.plc, quality: 'stale' } }
 })
 const tank = computed(() => status.value?.tanks.find(item => item.id === selected.value))
-const active = computed(() => status.value?.run.state === 'running' || status.value?.agv.moving === true)
+const active = computed(() => status.value?.run.state === 'running' || status.value?.agv.moving === true
+  || status.value?.mockStationVisit?.busy === true)
 const controlsDisabled = computed(() => busy.value || !connected.value || active.value)
 const freshData = computed(() => connected.value && status.value?.plc.quality === 'live')
 const alarms = computed(() => status.value?.tanks.filter(item => item.alarm) ?? [])
@@ -77,6 +78,10 @@ function requestAgv(path: 'status' | 'command', init: RequestInit) {
   return request<AgvStatus>(`agv/${path}`, init)
 }
 
+function requestJobGateway(signal: AbortSignal) {
+  return request<JobGatewayStatus>('job-gateway/status', { signal })
+}
+
 function loadLibrary() {
   return request<RecipeLibrary>('line/recipes', { signal: AbortSignal.timeout(5000) })
 }
@@ -117,7 +122,8 @@ async function command(action: Command): Promise<boolean> {
       signal: AbortSignal.timeout(action.action === 'plc-door' ? 10000 : 5000),
     })
     if (action.action === 'settings') notice.value = `Settings confirmed for tank #${action.tank}.`
-    else if (action.action === 'move') notice.value = `Move to tank #${action.tank} requested.`
+    else if (action.action === 'move') notice.value = snapshot.value.mockStationVisit
+      ? `Mock station visit requested for tank #${action.tank}.` : `Move to tank #${action.tank} requested.`
     else notice.value = NOTICES[action.action] ?? ''
     if (action.action === 'reset') selected.value = 1
     return true
@@ -227,7 +233,10 @@ onUnmounted(() => {
               <small v-else-if="connected && !status.agv.stationConfirmed">Stopped between stations</small>
               <small v-else>{{ tankName(status.agv.station) }}</small>
             </dd>
-            <dd v-else><strong>Station unavailable</strong><small>See AGV jog for link status</small></dd>
+            <dd v-else>
+              <strong>Station unavailable</strong>
+              <small>{{ status.mockStationVisit ? 'Mock station visit' : 'See AGV jog for link status' }}</small>
+            </dd>
           </div>
           <div class="status-tile" :class="{ alarm: freshData && alarms.length > 0, caution: !freshData }">
             <dt>{{ status.simulation ? 'Alarms' : 'Tank alarms' }}</dt>
@@ -252,7 +261,7 @@ onUnmounted(() => {
     </header>
 
     <div class="page-body">
-      <AgvControls v-if="page === 'agv'" :request="requestAgv" />
+      <AgvControls v-if="page === 'agv'" :request="requestAgv" :request-job-gateway="requestJobGateway" />
 
       <main v-else-if="!status" class="page">
         <p class="banner banner-alert" role="status">Connecting to the line service…</p>
@@ -292,6 +301,7 @@ onUnmounted(() => {
             :connected="connected"
             :title="status.simulation ? 'Manual control' : 'Tank monitor'"
             :hint="status.simulation ? 'Select a tank to access its controls, PLC settings, and AGV move command.' : 'Select a tank to view its PLC readings and equipment status.'"
+            animate-travel
             @select="id => selected = id"
           >
             <template #actions>
