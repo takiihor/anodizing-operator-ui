@@ -16,8 +16,9 @@ JOB_TIMEOUT_SECONDS = 20
 class MockStationVisit:
     """Keep the job alive on the backend while the browser polls local status."""
 
-    def __init__(self, gateway: MockIPCClient):
+    def __init__(self, gateway: MockIPCClient, *, repeatable=False):
         self.gateway = gateway
+        self.repeatable = repeatable
         self._lock = Lock()
         self._closed = Event()
         self._worker = None
@@ -29,8 +30,10 @@ class MockStationVisit:
         with self._lock:
             if self._closed.is_set() or (self._worker and self._worker.is_alive()):
                 raise ValueError('Wait for the current station visit to finish.')
-            if self._job and self._job['state'] in ('done', 'unknown'):
-                raise ValueError('Restart the isolated mock demo to run another visit.')
+            if self._job:
+                state = self._job['state']
+                if state == 'unknown' or (state == 'done' and not self.repeatable):
+                    raise ValueError('Restart the console to run another simulated visit.')
             job_id = f'visit-{uuid4().hex}'
             self._job = {'jobId': job_id, 'tank': tank, 'station': MOCK_STATIONS[tank],
                          'state': 'claiming', 'message': None}

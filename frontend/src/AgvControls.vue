@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import JobGatewayStatus from './JobGatewayStatus.vue'
-import type { AgvAction, AgvAuthority, AgvStatus, JobGatewayStatus as GatewayStatus } from './types'
+import type { AgvAction, AgvAuthority, AgvStatus } from './types'
 
 const props = defineProps<{
   request: (path: 'status' | 'command', init: RequestInit) => Promise<AgvStatus>
-  requestJobGateway: (signal: AbortSignal) => Promise<GatewayStatus>
 }>()
 
 const movements = [
@@ -150,6 +148,7 @@ onUnmounted(() => clearInterval(timer))
 
 <template>
   <main class="page agv-page">
+    <slot />
     <section class="panel agv-controls" aria-labelledby="agv-title">
       <div class="panel-heading">
         <div>
@@ -200,6 +199,5 @@ onUnmounted(() => clearInterval(timer))
         <p v-else-if="notice || outcome" class="agv-message" role="status">{{ notice || outcome }}</p>
       </div>
     </section>
-    <JobGatewayStatus :request="requestJobGateway" />
   </main>
 </template>

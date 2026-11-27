@@ -2,9 +2,18 @@
 import { computed, ref, watch } from 'vue'
 import type { Command, DoorPilotAction, Field, LineStatus, Tank, TankControl } from './types'
 
-const props = defineProps<{ tank: Tank; status: LineStatus; disabled: boolean; showControls?: boolean }>()
+const props = defineProps<{
+  tank: Tank
+  status: LineStatus
+  disabled: boolean
+  showControls?: boolean
+  checkPlc?: () => Promise<LineStatus['plc']>
+}>()
 const emit = defineEmits<{ command: [command: Command] }>()
 const draft = ref<Record<string, string | number>>({})
+const checkingPlc = ref(false)
+const plcCheckPassed = ref(false)
+const plcCheckMessage = ref('')
 
 const fields = computed(() => props.tank.fields)
 const visits = computed(() => props.status.recipe.steps.flatMap((step, index) =>
@@ -32,6 +41,7 @@ const mockJobLabel = computed(() => {
 })
 const doorPilot = computed(() => props.showControls && props.status.doorPilot?.tank === props.tank.id
   ? props.status.doorPilot : undefined)
+const canTestDoor = computed(() => !props.disabled && live.value && plcCheckPassed.value && !checkingPlc.value)
 const canEdit = computed(() => manual.value && !props.disabled && live.value && props.status.plc.remote)
 const changed = computed(() =>
   fields.value.filter(field => field.editable && field.value !== null && String(field.value) !== String(draft.value[field.key] ?? '')),
@@ -40,6 +50,29 @@ const changed = computed(() =>
 watch([() => props.tank.id, readback], () => {
   draft.value = Object.fromEntries(fields.value.map(field => [field.key, field.value === null ? '' : String(field.value)]))
 }, { immediate: true })
+
+watch(live, fresh => {
+  if (!fresh && plcCheckPassed.value) {
+    plcCheckPassed.value = false
+    plcCheckMessage.value = 'PLC feedback was interrupted. Check communication again.'
+  }
+})
+
+async function checkCommunication() {
+  if (!props.checkPlc || checkingPlc.value) return
+  checkingPlc.value = true
+  plcCheckPassed.value = false
+  plcCheckMessage.value = ''
+  try {
+    await props.checkPlc()
+    plcCheckPassed.value = true
+    plcCheckMessage.value = 'PLC communication verified. Fresh reading received.'
+  } catch (failure) {
+    plcCheckMessage.value = failure instanceof Error ? failure.message : 'Could not check PLC communication.'
+  } finally {
+    checkingPlc.value = false
+  }
+}
 
 function recipeTarget(field: Field) {
   const visit = visits.value[0]
@@ -70,6 +103,7 @@ function controlState(control: TankControl) {
 function sendDoor(operation: DoorPilotAction) {
   const pilot = doorPilot.value
   if (props.disabled || !live.value || !pilot?.revision || pilot.nextAction !== operation) return
+  if ((operation === 'open' || operation === 'close') && !canTestDoor.value) return
   const messages = {
     open: 'Open the physical door on tank #1? Confirm that the area is clear and you can observe the movement.',
     close: 'Close the physical door on tank #1? Confirm that the area is clear and you can observe the movement.',
@@ -155,15 +189,25 @@ function submit() {
       </section>
       <p v-else-if="manual && mockVisit" class="hint">Select Tank #3 to run the mock station visit.</p>
 
+      <section v-if="checkPlc && !status.simulation" class="tank-controls" aria-label="PLC communication">
+        <button type="button" class="button secondary full" :disabled="checkingPlc" @click="checkCommunication">
+          {{ checkingPlc ? 'Checking PLC…' : 'Check PLC communication' }}
+        </button>
+        <p v-if="plcCheckMessage" class="hint" role="status">{{ plcCheckMessage }}</p>
+      </section>
+
       <section v-if="doorPilot" class="tank-controls" aria-labelledby="door-pilot-title">
         <div class="settings-heading">
           <h3 id="door-pilot-title">Door control</h3>
           <span class="plc-mode">Live PLC</span>
         </div>
-        <p class="hint" role="status">{{ live ? doorPilot.message : 'Fresh PLC feedback is required.' }}</p>
+        <p class="hint" role="status">
+          {{ live ? doorPilot.message : 'Fresh PLC feedback is required.' }}
+          <template v-if="live && !plcCheckPassed && (doorPilot.nextAction === 'open' || doorPilot.nextAction === 'close')"> Check PLC communication before requesting movement.</template>
+        </p>
         <div class="tank-control-grid">
-          <button type="button" class="button secondary" :disabled="disabled || !live || doorPilot.nextAction !== 'open'" @click="sendDoor('open')">Open door</button>
-          <button type="button" class="button secondary" :disabled="disabled || !live || doorPilot.nextAction !== 'close'" @click="sendDoor('close')">Close door</button>
+          <button type="button" class="button secondary" :disabled="!canTestDoor || doorPilot.nextAction !== 'open'" @click="sendDoor('open')">Open door</button>
+          <button type="button" class="button secondary" :disabled="!canTestDoor || doorPilot.nextAction !== 'close'" @click="sendDoor('close')">Close door</button>
         </div>
         <button v-if="doorPilot.nextAction === 'clear'" type="button" class="button primary" :disabled="disabled || !live" @click="sendDoor('clear')">Clear PLC command</button>
         <button v-if="doorPilot.nextAction === 'resolve'" type="button" class="button secondary" :disabled="disabled || !live" @click="sendDoor('resolve')">Acknowledge after inspection</button>

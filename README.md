@@ -4,8 +4,9 @@ An operator console for a 16-tank anodizing line. Save and reuse tank
 sequences, follow the active and next steps on the map, and select any tank
 to view its status or use its manual controls.
 
-The console starts in simulation. PLC monitor mode can display live tank
-readings. The **AGV jog** page uses the console's standalone AGV module.
+The console starts in simulation unless it has a deployment profile. PLC
+monitor mode displays live tank readings. The **AGV jog** page shows the
+IPC gateway and the console's standalone AGV module.
 [Design and live integration notes](ANODIZING_OPERATOR_UI.md)
 
 ## Start the console
@@ -16,7 +17,14 @@ Run this command from the repository root on Linux.
 ./start.sh
 ```
 
-Use the console from the same computer. [Open the console on port 8871](http://127.0.0.1:8871/)
+The launcher opens the console when run from a Linux desktop. Use the console
+from the same computer. [Open the console on port 8871](http://127.0.0.1:8871/)
+
+On port 8871, the launcher loads
+`~/.config/anodizing-operator-ui/monitor.env` if present. Use one `NAME=value`
+setting per line. Exported environment variables take precedence. Use
+`ANODIZING_PLC_MODE=monitor` for live readings or `door-pilot` for the
+supervised Tank 1 door test. Keep the PLC and IPC keys in private files.
 
 The start script builds the frontend when needed. It requires Python 3.10+,
 Node.js 22.12+, npm, Bash, `curl`, `flock`, and `ss`.
@@ -40,6 +48,16 @@ Node.js 22.12+, npm, Bash, `curl`, `flock`, and `ss`.
 The **Tank controls** section follows the photographed pushbuttons for each tank.
 The door on physical tank #13 uses the supplier's `Tank12_Door…` tags, as
 confirmed on the line.
+
+## Test from the console
+
+1. In **Manual**, click **Check PLC communication** to fetch a fresh catalog
+   and PLC reading. Compare the displayed tank status with the line.
+2. For the supervised Tank 1 pilot, follow the on-site procedure, select
+   **Tank 1**, and use the available **Open door** or **Close door** action.
+3. In **AGV jog**, click **Check IPC communication** and review **IPC to AGV**
+   for vehicle feedback. **Test move to Tank #3 (simulation)** runs an
+   isolated station visit and displays its result on the same page.
 
 ## Try the built-in recipe
 
@@ -137,15 +155,16 @@ if a measured clock correction is needed.
 
 ## Pilot the tank #1 door
 
-Use the same PLC environment settings and a separate port for the supervised
-tank #1 pilot.
+With `ANODIZING_PLC_MODE=door-pilot` in the port 8871 deployment profile,
+use **Manual → Tank 1**. To run the supervised pilot separately, use the
+same PLC environment settings and another port.
 
 ```sh
 ANODIZING_PLC_MODE=door-pilot ./start.sh 8873
 ```
 
-Open **Manual**, select **tank #1**, and confirm the area is clear and the door
-can be observed before requesting **Open door** or **Close door**. Once the PLC
+Click **Check PLC communication** before requesting door movement. Confirm the
+area is clear and the door can be observed before making the request. Once the PLC
 reports the requested limit and the operator has seen the door stop, use
 **Clear PLC command**. The pilot waits for fresh confirmation that both command
 bits are clear before allowing the next movement.

@@ -7,6 +7,7 @@ import ssl
 from urllib.parse import urlsplit
 
 MAX_REPLY_BYTES = 512 * 1024
+DEVICE_FRESH_SECONDS = 5
 
 
 class JobGatewayUnavailable(Exception):
@@ -38,6 +39,20 @@ class JobGatewayReads:
         if not isinstance(jobs, list) or not all(isinstance(job, dict) for job in jobs):
             raise JobGatewayUnavailable('IPC jobs returned an invalid job list.')
 
+        device = status.get('device')
+        agv = None
+        if isinstance(device, dict) and type(device.get('connected')) is bool:
+            connected = device['connected']
+            age = device.get('status_age_s')
+            age = age if type(age) in (int, float) and 0 <= age < float('inf') else None
+            report = device.get('status')
+            agv = {
+                'connected': connected,
+                'fresh': (connected and device.get('stale') is False and isinstance(report, dict)
+                          and bool(report) and age is not None and age < DEVICE_FRESH_SECONDS),
+                'statusAge': age,
+            }
+
         return {
             'configured': True,
             'health': {
@@ -53,6 +68,7 @@ class JobGatewayReads:
                 'activeJobId': status['active_job_id'],
                 'recoveryRequired': status['recovery_required'],
             },
+            'agv': agv,
             'jobs': [
                 {key: job[key] for key in ('job_id', 'type', 'state') if isinstance(job.get(key), str)}
                 for job in jobs

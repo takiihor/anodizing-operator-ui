@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AgvControls from './AgvControls.vue'
+import JobGatewayStatusPanel from './JobGatewayStatus.vue'
 import RecipesPage from './RecipesPage.vue'
 import RunBar from './RunBar.vue'
 import SettingsPage from './SettingsPage.vue'
@@ -80,6 +81,10 @@ function requestAgv(path: 'status' | 'command', init: RequestInit) {
 
 function requestJobGateway(signal: AbortSignal) {
   return request<JobGatewayStatus>('job-gateway/status', { signal })
+}
+
+function checkPlc() {
+  return request<LineStatus['plc']>('plc/check', { signal: AbortSignal.timeout(6000) })
 }
 
 function loadLibrary() {
@@ -261,7 +266,14 @@ onUnmounted(() => {
     </header>
 
     <div class="page-body">
-      <AgvControls v-if="page === 'agv'" :request="requestAgv" :request-job-gateway="requestJobGateway" />
+      <AgvControls v-if="page === 'agv'" :request="requestAgv">
+        <JobGatewayStatusPanel
+          :request="requestJobGateway"
+          :station-visit="status?.stationVisitTest"
+          :test-disabled="controlsDisabled"
+          @test-visit="command({ action: 'test-station-visit' })"
+        />
+      </AgvControls>
 
       <main v-else-if="!status" class="page">
         <p class="banner banner-alert" role="status">Connecting to the line service…</p>
@@ -308,7 +320,8 @@ onUnmounted(() => {
               <a href="/agv" data-nav="agv" class="button ghost button-link">AGV jog controls</a>
             </template>
           </TrackMap>
-          <TankPanel class="area-side" :tank="tank" :status="status" :disabled="controlsDisabled" show-controls @command="command" />
+          <TankPanel class="area-side" :tank="tank" :status="status" :disabled="controlsDisabled" :check-plc="checkPlc"
+            show-controls @command="command" />
         </div>
 
         <RecipesPage

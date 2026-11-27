@@ -124,8 +124,8 @@ class PLCModuleTest(unittest.TestCase):
                 with urlopen(url + '/api/line/token') as response:
                     token = json.load(response)['token']
 
-                def request(body=None):
-                    route = '/api/line/status' if body is None else '/api/line/command'
+                def request(body=None, *, route=None):
+                    route = route or ('/api/line/status' if body is None else '/api/line/command')
                     headers = {'X-Operator-Token': token, 'Content-Type': 'application/json'}
                     data = json.dumps(body).encode() if body is not None else None
                     with urlopen(Request(url + route, data, headers)) as response:
@@ -135,6 +135,24 @@ class PLCModuleTest(unittest.TestCase):
                         return json.loads(raw)
 
                 yield request
+
+    def test_communication_check_revalidates_the_plc_without_writing(self):
+        with self.operator() as request:
+            self.assertEqual(request()['plc']['quality'], 'live')
+            self.read_failure = True
+            with self.assertRaises(HTTPError) as failure:
+                request(route='/api/plc/check')
+            with failure.exception as response:
+                self.assertEqual(response.code, 503)
+            self.assertEqual(request()['plc']['quality'], 'stale')
+
+            self.read_failure = False
+            self.tick(1)
+            verified = request(route='/api/plc/check')
+            self.assertEqual(verified, {'quality': 'live', 'sampleTime': self.now.isoformat(), 'remote': True})
+
+        self.assertEqual([path for _, path, _ in self.calls], ['/api/v1/tags/list', '/api/v1/tags/read'] * 3)
+        self.assertEqual(self.writes, [])
 
     def test_projects_live_signals_and_rejects_line_commands(self):
         with self.operator() as request:

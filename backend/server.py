@@ -32,7 +32,8 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, port, dist=DIST, recipe_path=None, agv_controller_port=None, tank_path=None, plc_monitor=None,
-                 door_pilot=None, agv_controller=None, agv_api_only=False, job_gateway=None, mock_station_visit=None):
+                 door_pilot=None, agv_controller=None, agv_api_only=False, job_gateway=None, mock_station_visit=None,
+                 station_visit_test=None):
         self.dist = dist
         self.agv_api_only = agv_api_only
         self.line = None if agv_api_only else OperatorLine(recipe_path=recipe_path, tank_path=tank_path)
@@ -42,6 +43,7 @@ class Server(ThreadingHTTPServer):
         self.door_pilot = door_pilot
         self.job_gateway = job_gateway
         self.mock_station_visit = mock_station_visit
+        self.station_visit_test = station_visit_test
         if mock_station_visit is not None:
             self.line.mode = 'manual'
             self.mock_commands = Lock()
@@ -51,13 +53,16 @@ class Server(ThreadingHTTPServer):
         self.hosts = {f'127.0.0.1:{actual_port}', f'localhost:{actual_port}'}
 
     def server_close(self):
-        if self.mock_station_visit is not None:
-            self.mock_station_visit.close()
+        for visit in (self.mock_station_visit, self.station_visit_test):
+            if visit is not None:
+                visit.close()
         if isinstance(self.agv, AgvController):
             self.agv.close()
         super().server_close()
 
-    def line_status(self, status):
+    def line_status(self, status, *, revalidate_plc=False):
+        if self.station_visit_test is not None:
+            status['stationVisitTest'] = self.station_visit_test.snapshot()
         if self.mock_station_visit is not None:
             visit = self.mock_station_visit.snapshot()
             job = visit['job'] or {}
@@ -70,13 +75,18 @@ class Server(ThreadingHTTPServer):
             status['run']['blockers'] = ['The mock gateway demo runs Manual station visits.']
         if self.plc_monitor is None:
             return status
-        sample = self.plc_monitor.snapshot()
+        sample = self.plc_monitor.snapshot(revalidate=revalidate_plc)
         result = monitoring_status(status, sample)
         if self.door_pilot is not None:
             result['doorPilot'] = self.door_pilot.status(sample)
         return result
 
     def line_command(self, body):
+        if body.get('action') == 'test-station-visit':
+            if self.station_visit_test is None:
+                raise ValueError('The simulated station visit is unavailable.')
+            self.station_visit_test.start(3)
+            return self.line_status(self.line.snapshot())
         if self.mock_station_visit is not None:
             return self.line_status(self.mock_line_command(body))
         if body.get('action') == 'plc-door':
@@ -145,6 +155,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(HTTPStatus.NOT_FOUND, {'error': 'This service hosts the AGV API.'})
         if path == '/api/line/status':
             return self.reply(HTTPStatus.OK, self.server.line_status(self.server.line.snapshot()))
+        if path == '/api/plc/check':
+            if self.server.plc_monitor is None:
+                return self.reply(HTTPStatus.BAD_REQUEST, {'error': 'Live PLC monitoring is disabled.'})
+            plc = self.server.line_status(self.server.line.snapshot(), revalidate_plc=True)['plc']
+            if plc['quality'] != 'live':
+                return self.reply(HTTPStatus.SERVICE_UNAVAILABLE, {'error': 'No fresh reading received from the PLC.'})
+            return self.reply(HTTPStatus.OK, plc)
         if path == '/api/line/recipes':
             return self.reply(HTTPStatus.OK, self.server.line.recipe_library())
         if path == '/api/agv/status':
@@ -253,9 +270,12 @@ def main():
     with ExitStack() as stack:
         pilot = None
         mock_visit = None
+        station_visit_test = None
         if gateway_mode == 'mock':
             job_gateway = stack.enter_context(running_mock_ipc())
             mock_visit = MockStationVisit(job_gateway)
+        elif job_gateway is not None:
+            station_visit_test = MockStationVisit(stack.enter_context(running_mock_ipc()), repeatable=True)
         if plc_mode == 'door-pilot':
             try:
                 state.mkdir(parents=True, exist_ok=True)
@@ -270,7 +290,7 @@ def main():
                                            tank_path=state / f'tanks-{args.port}.json',
                                            agv_controller=agv, plc_monitor=plc, door_pilot=pilot,
                                            agv_api_only=args.agv_api_only, job_gateway=job_gateway,
-                                           mock_station_visit=mock_visit))
+                                           mock_station_visit=mock_visit, station_visit_test=station_visit_test))
         service = 'AGV API' if args.agv_api_only else f'Operator {plc_mode}'
         print(f'{service}: http://127.0.0.1:{args.port}/', flush=True)
         try:

@@ -37,6 +37,7 @@ export type JobGatewayStatus = { configured: false } | {
   configured: true
   health: { build: string; protocol: number; enabled: boolean; simulated: boolean; motionEnabled: boolean }
   status: { owner: string | null; armed: boolean; activeJobId: string | null; recoveryRequired: boolean }
+  agv: { connected: boolean; fresh: boolean; statusAge: number | null } | null
   jobs: { job_id?: string; type?: string; state?: string }[]
 }
 
@@ -137,6 +138,7 @@ export interface LineStatus {
   agv: { station: number | null; stationConfirmed: boolean; destination: number | null; moving: boolean }
   manualTravel?: { durationMs: number; remainingMs: number } | null
   mockStationVisit?: MockStationVisit
+  stationVisitTest?: MockStationVisit
   scenario: { lowWater: boolean; timeScale: number } | null
   run: {
     state: 'idle' | 'running' | 'stopped' | 'complete'
@@ -157,6 +159,7 @@ export type Command =
   | { action: 'tank-control'; tank: number; control: TankControlId; active: boolean }
   | { action: 'plc-door'; tank: number; operation: DoorPilotAction; revision: string; confirmed: true }
   | { action: 'move'; tank: number }
+  | { action: 'test-station-visit' }
   | { action: 'simulation'; lowWater: boolean; quality: Quality }
   | { action: 'select-recipe'; id: string }
   | { action: 'save-recipe'; id: string | null; revision: number | null; name: string; part: string; steps: RecipeStep[] }

@@ -52,7 +52,9 @@ class JobGatewayTest(unittest.TestCase):
             '/v1/health': reply({'build': 'fixture', 'protocol': 2, 'gateway_enabled': True,
                                  'simulated': False, 'motion_enabled': False}),
             '/v1/status': reply({'owner': 'operator-ui', 'armed': False, 'recovery_required': False,
-                                 'active_job_id': None, 'unrelated': 'read-test-key'}),
+                                 'active_job_id': None, 'unrelated': 'read-test-key',
+                                 'device': {'connected': False, 'stale': False, 'status_age_s': 1.2,
+                                            'status': {'current_station': 8}}}),
             '/v1/jobs': reply({'jobs': [{'job_id': 'visit-1', 'type': 'station_visit', 'state': 'done',
                                          'lease_id': 'omit-this-lease'}]}),
         }
@@ -89,6 +91,7 @@ class JobGatewayTest(unittest.TestCase):
             self.assertTrue(status['configured'])
             self.assertFalse(status['health']['motionEnabled'])
             self.assertEqual(status['status']['owner'], 'operator-ui')
+            self.assertEqual(status['agv'], {'connected': False, 'fresh': False, 'statusAge': 1.2})
             self.assertEqual(status['jobs'], [{'job_id': 'visit-1', 'type': 'station_visit', 'state': 'done'}])
             self.assertNotIn(b'read-test-key', raw)
             self.assertNotIn(b'omit-this-lease', raw)

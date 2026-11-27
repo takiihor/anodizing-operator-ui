@@ -3,7 +3,7 @@ import json
 from threading import Thread
 from time import monotonic, sleep
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -23,8 +23,10 @@ class RecordedIPC(MockIPC):
 
 
 @contextmanager
-def mock_console(gateway):
-    with Server(0, job_gateway=gateway, mock_station_visit=MockStationVisit(gateway)) as server:
+def mock_console(gateway, *, live_gateway=None):
+    with Server(0, job_gateway=live_gateway or gateway,
+                mock_station_visit=MockStationVisit(gateway) if live_gateway is None else None,
+                station_visit_test=MockStationVisit(gateway, repeatable=True) if live_gateway is not None else None) as server:
         thread = Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
         thread.start()
         try:
@@ -41,12 +43,12 @@ def mock_console(gateway):
             thread.join()
 
 
-def follow(request):
+def follow(request, *, field='mockStationVisit'):
     observed = set()
     until = monotonic() + 10
     while monotonic() < until:
         status = request()
-        visit = status['mockStationVisit']
+        visit = status[field]
         observed.add(visit['job']['state'])
         if not visit['busy']:
             return status, observed
@@ -55,6 +57,22 @@ def follow(request):
 
 
 class MockStationVisitTest(unittest.TestCase):
+    def test_station_visit_test_uses_a_separate_mock_and_leaves_line_position_alone(self):
+        live_gateway = Mock()
+        state = RecordedIPC()
+        with running_mock_ipc(state) as gateway, mock_console(gateway, live_gateway=live_gateway) as request:
+            position = request()['agv']
+            for _ in range(2):
+                request({'action': 'test-station-visit'})
+                arrived, _ = follow(request, field='stationVisitTest')
+                self.assertEqual(arrived['stationVisitTest']['job']['state'], 'done')
+                self.assertEqual(arrived['agv'], position)
+
+        self.assertEqual(live_gateway.mock_calls, [])
+        submits = [body for method, path, body in state.calls if method == 'POST' and path == '/v1/submit']
+        self.assertEqual([job['params'] for job in submits], [{'station': 3}, {'station': 3}])
+        self.assertEqual(len({job['job_id'] for job in submits}), 2)
+
     def test_tank_three_submits_one_station_visit_and_confirms_arrival(self):
         state = RecordedIPC()
         with running_mock_ipc(state) as gateway, mock_console(gateway) as request:
