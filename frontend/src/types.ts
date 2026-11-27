@@ -1,0 +1,138 @@
+export type Mode = 'automatic' | 'manual'
+export type Quality = 'live' | 'stale' | 'unavailable'
+
+export type AgvAction = 'arm' | 'disarm' | 'query_status' | 'stop'
+  | 'forward' | 'reverse' | 'rotate_clockwise' | 'rotate_counterclockwise'
+
+export interface AgvAuthority {
+  controller: string
+  connectionId: number
+  stopGeneration: number
+}
+
+export interface AgvStatus {
+  setupUrl: string
+  authority: AgvAuthority
+  sequence: number
+  connected: boolean
+  transport: 'serial' | 'simulator' | 'wired' | null
+  armed: boolean
+  fresh: boolean
+  motion: 'moving' | 'stopped' | 'unknown'
+  speed: number | null
+  fault: number | null
+  statusAge: number | null
+  motionBlock: string | null
+  error: string | null
+  canStop: boolean
+  canQuery: boolean
+  haltPending: boolean
+  results: Partial<Record<AgvAction, { id: number; state: string; acknowledged: boolean; confirmedStopped: boolean }>>
+}
+
+export interface Field {
+  key: string
+  label: string
+  unit: string
+  /** Allowed range set in Settings (within the PLC limits). */
+  min: number
+  max: number
+  /** Hard limits from the PLC catalog. */
+  plcMin: number
+  plcMax: number
+  /** Whether operators can change this setting in Manual. */
+  editable: boolean
+  step: number
+  tag: string
+  value: number | null
+}
+
+export interface TankFieldSetup {
+  editable: boolean
+  min: number
+  max: number
+}
+
+export interface TankSetupBody {
+  name: string
+  fields: Record<string, TankFieldSetup>
+}
+
+export interface RecipeLibrary {
+  recipes: Recipe[]
+  selected: string
+}
+
+export type Page = 'run' | 'manual' | 'recipes' | 'settings' | 'agv'
+
+export type TankControlId = 'cycle' | 'filter' | 'heater' | 'ultrasonic' | 'door' | 'swing' | 'rectifier' | 'pressure'
+
+export interface TankControl {
+  id: TankControlId
+  label: string
+  active: boolean | null
+}
+
+export interface Tank {
+  id: number
+  name: string
+  temperature: number | null
+  timer: number | null
+  timerDone: boolean
+  alarm: string | null
+  details: { label: string; value: string }[]
+  fields: Field[]
+  controls: TankControl[]
+}
+
+export interface RecipeStep {
+  tank: number
+  temperature: number | null
+  dwell: number
+  plcTime: number
+}
+
+export interface RecipeSummary {
+  id: string
+  name: string
+}
+
+export interface Recipe extends RecipeSummary {
+  revision: number
+  part: string
+  date: string
+  steps: RecipeStep[]
+}
+
+export interface LineStatus {
+  mode: Mode
+  simulation: boolean
+  plc: { quality: Quality; sampleTime: string; remote: boolean }
+  agv: { station: number; stationConfirmed: boolean; destination: number | null; moving: boolean }
+  scenario: { lowWater: boolean; timeScale: number }
+  run: {
+    state: 'idle' | 'running' | 'stopped' | 'complete'
+    step: number | null
+    nextTank: number | null
+    phase: 'travel' | 'dwell' | null
+    blockers: string[]
+  }
+  tanks: Tank[]
+  recipe: Recipe
+  recipes: RecipeSummary[]
+  recipeStepLimit: number
+}
+
+export type Command =
+  | { action: 'mode'; mode: Mode }
+  | { action: 'settings'; tank: number; values: Record<string, number> }
+  | { action: 'tank-control'; tank: number; control: TankControlId; active: boolean }
+  | { action: 'move'; tank: number }
+  | { action: 'simulation'; lowWater: boolean; quality: Quality }
+  | { action: 'select-recipe'; id: string }
+  | { action: 'save-recipe'; id: string | null; revision: number | null; name: string; part: string; steps: RecipeStep[] }
+  | { action: 'delete-recipe'; id: string; revision: number }
+  | { action: 'tank-setup'; tank: number; setup: TankSetupBody }
+  | { action: 'tank-setup-default'; tank: number }
+  | { action: 'start'; recipeId: string; revision: number }
+  | { action: 'stop' | 'reset' }
